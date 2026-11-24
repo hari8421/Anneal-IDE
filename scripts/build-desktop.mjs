@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -88,13 +88,28 @@ if (!existsSync(LOCAL_PKG)) {
   process.exit(1);
 }
 
-const outPaths = TARGETS.split(',').map((target) => {
-  const parts = target.trim().split('-');
+const targets = TARGETS.split(',').map((target) => target.trim()).filter(Boolean);
+const singleTarget = targets.length === 1;
+const outPaths = targets.map((target) => {
+  const parts = target.split('-');
   const platform = parts[1];
   const arch = parts.slice(2).join('-');
   const ext = platform === 'win' ? '.exe' : '';
   return join(OUT_PATH, `${pkg.name}-${platform}-${arch}${ext}`);
 });
+
+// For a single target pkg writes an unsuffixed binary (or treats an extensionless
+// out path as a directory), so let it write into the output directory and then
+// rename to the canonical platform-suffixed name.
+const rawOutPaths = singleTarget
+  ? [join(OUT_PATH, `${pkg.name}${targets[0].split('-')[1] === 'win' ? '.exe' : ''}`)]
+  : outPaths;
+
+// pkg refuses to replace an existing output on this platform and exits 0, so a
+// rebuild could silently ship the previous binary. Clear every output this run
+// owns, including stale directories from earlier builds.
+mkdirSync(OUT_PATH, { recursive: true });
+for (const path of [...outPaths, ...rawOutPaths]) rmSync(path, { recursive: true, force: true });
 
 console.log(`[build-desktop] packaging ${TARGETS}`);
 try {
@@ -129,16 +144,23 @@ try {
 }
 
 // pkg spawns writers that can outlive the parent process, so its exit does not
-// mean the binaries are on disk yet. Poll the expected paths until every file
-// exists and its size holds steady between two polls.
-const expected = await (async () => {
+// mean the binaries are on disk yet. Poll until every file exists and its size
+// holds steady between two polls.
+const waitForFiles = async (paths) => {
   const deadline = Date.now() + 120_000;
   const sizes = new Map();
+  const isFile = (path) => {
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  };
   while (Date.now() < deadline) {
     let allPresent = true;
     let allStable = true;
-    for (const path of outPaths) {
-      if (!existsSync(path)) {
+    for (const path of paths) {
+      if (!isFile(path)) {
         allPresent = false;
         break;
       }
@@ -146,13 +168,27 @@ const expected = await (async () => {
       if (size <= 0 || sizes.get(path) !== size) allStable = false;
       sizes.set(path, size);
     }
-    if (allPresent && allStable) return outPaths;
-    await new Promise((r) => setTimeout(r, 500));
+    if (allPresent && allStable) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  return outPaths.filter((path) => existsSync(path));
-})();
+  return false;
+};
 
-const files = expected.length > 0 ? expected : walkSync(OUT);
+if (!(await waitForFiles(rawOutPaths))) {
+  console.error('[build-desktop] pkg did not produce the expected output: ' + rawOutPaths.join(', '));
+  process.exit(1);
+}
+if (singleTarget) {
+  for (let i = 0; i < rawOutPaths.length; i += 1) {
+    rmSync(outPaths[i], { recursive: true, force: true });
+    renameSync(rawOutPaths[i], outPaths[i]);
+  }
+}
+if (!(await waitForFiles(outPaths))) {
+  console.warn('[build-desktop] final binary paths did not stabilise; falling back to discovery');
+}
+
+const files = walkSync(OUT);
 const binaries = files.filter((file) => {
   const name = basename(file);
   if (name.endsWith('.exe') || /^anneal(-ide)?-/.test(name)) return true;
@@ -182,6 +218,11 @@ function entrySource() {
   return `import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createServer, finishShutdown } from './server/http';
+import {
+  chooseWorkspaceInteractively,
+  resolveLaunchWorkspace,
+  writeWorkspacePreference,
+} from './server/workspace';
 
 // A double-clicked binary that only prints to a console nobody is watching looks
 // broken, so the desktop entry opens the UI. ANNEAL_NO_OPEN=1 opts out (servers,
@@ -204,7 +245,23 @@ function openBrowser(url: string): void {
 async function main() {
   // Bundled into dist/bin, so the copied SPA sits one level up.
   const embeddedDist = process.env.ANNEAL_EMBEDDED_DIST ?? path.join(__dirname, '..');
-  const workspace = path.resolve(process.env.ANNEAL_WORKSPACE ?? process.cwd());
+
+  // Never silently open the directory the binary happened to be launched from.
+  // Explicit flag/env wins, then the remembered folder, then a native picker.
+  let launch = resolveLaunchWorkspace();
+  if (!launch && process.env.ANNEAL_NO_PROMPT !== '1') {
+    const chosen = chooseWorkspaceInteractively();
+    if (chosen) launch = { root: chosen, source: 'arg', explicit: true };
+  }
+  if (!launch) {
+    console.error(
+      '[anneal] no workspace selected. Launch with --workspace /path/to/project or set ANNEAL_WORKSPACE.',
+    );
+    process.exit(1);
+  }
+  const workspace = launch.root;
+  if (launch.explicit) writeWorkspacePreference(workspace);
+  console.log('[anneal] workspace: ' + workspace);
   const server = await createServer({ workspace, embeddedDist });
   await server.listen();
 

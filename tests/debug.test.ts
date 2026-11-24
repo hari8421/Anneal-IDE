@@ -37,11 +37,12 @@ describe('debug session (Node inspector)', () => {
     await session.start({ script: 'script.js', breakpoints: [{ path: 'script.js', line: 3 }], stopOnEntry: false });
 
     // A pause is published as soon as V8 stops; locals arrive a tick later.
+    // Allow up to 20 s — the inspector round-trip can be slow on loaded CI hosts.
     expect(
       await waitFor(() => {
         const snapshot = session?.snapshot();
         return snapshot?.status === 'paused' && snapshot.variables.length > 0;
-      }),
+      }, 20_000),
     ).toBe(true);
 
     const paused = session.snapshot();

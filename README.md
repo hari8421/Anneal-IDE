@@ -95,8 +95,22 @@ browser at it, so a double-click behaves like an app; set `ANNEAL_NO_OPEN=1` to 
 servers and CI. The macOS binary is cross-built and unsigned, so run
 `codesign --sign - pkg-out/anneal/anneal-ide-macos-arm64` before launching it there.
 
+The app always opens one explicit project folder — it never silently falls back to the directory it
+was launched from. Choose it in any of these ways:
+
+```bash
+./pkg-out/anneal/anneal-ide-macos-arm64 /path/to/project
+./pkg-out/anneal/anneal-ide-macos-arm64 --workspace /path/to/project
+ANNEAL_WORKSPACE=/path/to/project ./pkg-out/anneal/anneal-ide-macos-arm64
+```
+
+On a fresh double-click, macOS shows a native folder picker. The chosen folder is saved to
+`~/.anneal/workspace.json` and reused next time. You can also change it at any time from
+**Settings → Workspace** in the IDE; switching folders stops active runs and loads that project's
+specs, runs and settings.
+
 `ANNEAL_DESKTOP_TARGETS=node24-linux-x64` narrows the build, `ANNEAL_DESKTOP_SKIP_PKG=1` stops after
-staging the bundle (useful in CI), and `ANNEAL_PORT` / `ANNEAL_WORKSPACE` behave as they do in dev.
+staging the bundle (useful in CI), and `ANNEAL_PORT` behaves as it does in dev.
 
 Each target needs a Node base binary that `@yao-pkg/pkg` can still download; if one is missing from
 its cache, pkg quietly falls back to *compiling Node from source* (tens of minutes). Check the

@@ -1,158 +1,432 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { Autonomy, Health } from '../lib/api';
-import type { SessionState } from '../lib/session';
+import type { AskMessage, ChatMode, ChatRecord } from '../lib/chat';
+import type { LogEntry, SessionState } from '../lib/session';
+import { fuzzyScore } from './QuickOpen';
+import { Icon, type IconName } from './Icon';
 
 interface ChatPanelProps {
+  mode: ChatMode;
+  onModeChange: (mode: ChatMode) => void;
+  chats: ChatRecord[];
+  activeChatId: string | null;
+  onSelectChat: (id: string) => void;
+  onNewChat: () => void;
+  onDeleteChat: (id: string) => void;
   session: SessionState;
+  askMessages: AskMessage[];
+  askStreaming: boolean;
   health: Health | null;
   autonomy: Autonomy;
-  selectedFiles: string[];
   onAutonomyChange: (autonomy: Autonomy) => void;
-  onRun: (goal: string) => void;
+  selectedFiles: string[];
+  onRemoveFile: (path: string) => void;
+  workspaceFiles: string[];
+  runSummary: string | null;
+  onRunGoal: (goal: string) => void;
+  onAsk: (goal: string) => void;
+  onSpec: (goal: string) => void;
   onCancel: () => void;
   onResume: () => void;
-  onRemoveFile: (path: string) => void;
+  onOpenFile: (path: string) => void;
+  onClose: () => void;
+  submitRef: MutableRefObject<(() => void) | null>;
   onRetryHealth: () => void;
 }
 
+const MODES: Array<{ key: ChatMode; label: string; icon: IconName; hint: string }> = [
+  { key: 'ask', label: 'Ask', icon: 'lightbulb', hint: 'Answer questions without touching files.' },
+  { key: 'agent', label: 'Agent', icon: 'zap', hint: 'Plan, edit files and run tools until the goal is done.' },
+  { key: 'spec', label: 'Spec', icon: 'specs', hint: 'Turn a feature idea into requirements, design and tasks.' },
+];
+
+const TOOL_ICONS: Record<string, IconName> = {
+  read_file: 'file',
+  write_file: 'edit',
+  apply_patch: 'edit',
+  list_files: 'files',
+  search: 'search',
+  run_command: 'terminal',
+  remember: 'database',
+};
+
+function AgentEntry({ entry, onOpenFile }: { entry: LogEntry; onOpenFile: (path: string) => void }) {
+  if (entry.kind === 'tool') {
+    const args = (() => {
+      try {
+        return JSON.parse(entry.args ?? '{}') as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })();
+    const path = typeof args?.path === 'string' ? args.path : typeof args?.file === 'string' ? args.file : null;
+    return (
+      <div className={`ui-message tool ${entry.status ?? ''}`}>
+        <details>
+          <summary>
+            <span className="ui-msg-icon"><Icon name={TOOL_ICONS[entry.name ?? ''] ?? 'code'} size={13} /></span>
+            <code className="ui-tool-name">{entry.name}</code>
+            {path && (
+              <button type="button" className="ui-link" onClick={(event) => { event.preventDefault(); onOpenFile(path); }}>
+                {path}
+              </button>
+            )}
+            <span className="ui-grow" />
+            {entry.awaitingApproval && <span className="ui-badge warn">awaiting approval</span>}
+            {!entry.awaitingApproval && entry.status === 'running' && <Icon name="loader" size={12} className="spin" />}
+            {entry.status === 'ok' && <Icon name="check" size={13} className="ok-text" />}
+            {entry.status === 'error' && <Icon name="warning" size={13} className="error-text" />}
+            <Icon name="chevronDown" size={12} className="ui-detail-caret" />
+          </summary>
+          <div className="ui-message-detail">
+            {entry.args && <pre>{entry.args}</pre>}
+            {entry.text && <pre>{entry.text}</pre>}
+          </div>
+        </details>
+      </div>
+    );
+  }
+  if (entry.kind === 'user') {
+    return (
+      <div className="ui-message user">
+        <div className="ui-avatar user"><Icon name="user" size={13} /></div>
+        <div className="ui-bubble">{entry.text}</div>
+      </div>
+    );
+  }
+  if (entry.kind === 'notice' || entry.kind === 'stage') {
+    return (
+      <div className={`ui-message notice ${entry.status ?? ''}`}>
+        <Icon name={entry.status === 'error' ? 'warning' : entry.status === 'running' ? 'loader' : 'check'} size={12} className={entry.status === 'running' ? 'spin' : ''} />
+        <span>{entry.text}</span>
+        {entry.step !== undefined && <span className="ui-count">step {entry.step + 1}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="ui-message assistant">
+      <div className="ui-avatar bot"><Icon name="bot" size={14} /></div>
+      <div className="ui-bubble">
+        {entry.text || (entry.status === 'running' ? <span className="ui-thinking">thinking…</span> : '')}
+        {entry.status === 'running' && <span className="ui-caret" />}
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPanel({
+  mode,
+  onModeChange,
+  chats,
+  activeChatId,
+  onSelectChat,
+  onNewChat,
+  onDeleteChat,
   session,
+  askMessages,
+  askStreaming,
   health,
   autonomy,
-  selectedFiles,
   onAutonomyChange,
-  onRun,
+  selectedFiles,
+  onRemoveFile,
+  workspaceFiles,
+  runSummary,
+  onRunGoal,
+  onAsk,
+  onSpec,
   onCancel,
   onResume,
-  onRemoveFile,
+  onOpenFile,
+  onClose,
+  submitRef,
   onRetryHealth,
 }: ChatPanelProps) {
   const [goal, setGoal] = useState('');
+  const [historyAt, setHistoryAt] = useState(-1);
+  const [showHistory, setShowHistory] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const offline = Boolean(health && !health.lmStudio.ok);
-  const busy = session.streaming;
+  const busy = session.streaming || askStreaming;
+  const activeChat = chats.find((chat) => chat.id === activeChatId);
 
-  // An agent transcript is a log: keep the newest step in view as it arrives.
   useEffect(() => {
     const node = transcriptRef.current;
     if (node) node.scrollTop = node.scrollHeight;
-  }, [session.entries, session.result]);
+  }, [session.entries, askMessages, mode, session.result]);
 
-  const submit = () => {
-    const trimmed = goal.trim();
-    if (!trimmed || busy) return;
-    onRun(trimmed);
-    setGoal('');
+  const mention = useMemo(() => {
+    const match = goal.match(/(?:^|\s)@([\w./-]*)$/);
+    if (!match) return null;
+    return { query: match[1] ?? '', start: goal.lastIndexOf('@') };
+  }, [goal]);
+
+  const suggestions = useMemo(() => {
+    if (!mention) return [];
+    return workspaceFiles
+      .map((path) => ({ path, score: fuzzyScore(path, mention.query) }))
+      .filter((entry): entry is { path: string; score: number } => entry.score !== null)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((entry) => entry.path);
+  }, [mention, workspaceFiles]);
+
+  const insertFile = (path: string) => {
+    if (!mention) return;
+    setGoal(`${goal.slice(0, mention.start)}@${path} `);
+    textareaRef.current?.focus();
   };
 
+  const submit = () => {
+    const text = goal.trim();
+    if (!text || busy || offline) return;
+    if (mode === 'ask') onAsk(text);
+    else if (mode === 'spec') onSpec(text);
+    else onRunGoal(text);
+    setGoal('');
+    setHistoryAt(-1);
+  };
+  submitRef.current = submit;
+
+  const history = useMemo(
+    () => chats.flatMap((chat) => chat.askMessages.filter((message) => message.role === 'user').map((message) => message.text)),
+    [chats],
+  );
+
+  const resultStatus = session.result?.status ?? null;
+
   return (
-    <section className="chat-panel">
-      <header className="chat-header">
-        <div>
-          <span className="chat-title">Agent</span>
-          <span className={`pill ${autonomy === 'autopilot' ? 'accent' : ''}`}>{autonomy}</span>
+    <section className="ui-chat">
+      <header className="ui-chat-header">
+        <div className="ui-chat-heading">
+          <span className="ui-chat-title"><Icon name="sparkles" size={15} /> Anneal agent</span>
+          <span className={`ui-connection ${offline ? 'off' : 'on'}`} title={health?.lmStudio.baseUrl ?? 'Connecting…'}>
+            {offline ? 'offline' : 'ready'}
+          </span>
+        </div>
+        <div className="ui-chat-actions">
+          <div className="ui-history-wrap">
+            <button
+              type="button"
+              className="ui-icon-button"
+              title="Conversation history"
+              aria-label="Conversation history"
+              onClick={() => setShowHistory((value) => !value)}
+            >
+              <Icon name="history" size={15} />
+            </button>
+            {showHistory && (
+              <div className="ui-history-menu">
+                <div className="ui-menu-head">Conversations</div>
+                {chats.map((chat) => (
+                  <div key={chat.id} className={`ui-menu-row${chat.id === activeChatId ? ' active' : ''}`}>
+                    <button type="button" onClick={() => { onSelectChat(chat.id); setShowHistory(false); }}>
+                      <Icon name={chat.mode === 'ask' ? 'lightbulb' : chat.mode === 'spec' ? 'specs' : 'zap'} size={13} />
+                      <span>{chat.title}</span>
+                    </button>
+                    <button type="button" className="ui-icon-button" title="Delete conversation" onClick={() => onDeleteChat(chat.id)}>
+                      <Icon name="trash" size={12} />
+                    </button>
+                  </div>
+                ))}
+                {!chats.length && <div className="ui-empty small">No saved conversations.</div>}
+                <button type="button" className="ui-menu-new" onClick={() => { onNewChat(); setShowHistory(false); }}>
+                  <Icon name="plus" size={13} /> New conversation
+                </button>
+              </div>
+            )}
+          </div>
+          <button type="button" className="ui-icon-button" title="New conversation" aria-label="New conversation" onClick={onNewChat}>
+            <Icon name="plus" size={16} />
+          </button>
+          <button type="button" className="ui-icon-button" title="Hide chat" aria-label="Hide chat" onClick={onClose}>
+            <Icon name="panelRight" size={15} />
+          </button>
+        </div>
+      </header>
+
+      <div className="ui-mode-bar">
+        <div className="ui-segmented">
+          {MODES.map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              className={mode === entry.key ? 'active' : ''}
+              title={entry.hint}
+              onClick={() => onModeChange(entry.key)}
+            >
+              <Icon name={entry.icon} size={13} /> {entry.label}
+            </button>
+          ))}
         </div>
         <select
-          className="select small"
+          className="ui-select small"
           value={autonomy}
-          onChange={(event) => onAutonomyChange(event.target.value as Autonomy)}
+          disabled={mode !== 'agent'}
           title="Autopilot edits immediately; supervised asks before each tool call"
+          onChange={(event) => onAutonomyChange(event.target.value as Autonomy)}
         >
           <option value="autopilot">Autopilot</option>
           <option value="supervised">Supervised</option>
         </select>
-      </header>
+      </div>
 
       {offline && (
-        <div className="banner warn">
+        <div className="ui-banner">
+          <Icon name="warning" size={14} />
           <span>
-            No model server is answering at {health?.lmStudio.baseUrl}. The agent still runs — start LM
-            Studio (or pick another provider under Models) and it will connect on the next request.
+            No model server is answering at {health?.lmStudio.baseUrl}. The agent still runs — start LM Studio
+            (or pick another provider under Models) and it will connect on the next request.
           </span>
-          <button className="btn ghost small" onClick={onRetryHealth}>
+          <button type="button" className="ui-btn ghost small" onClick={onRetryHealth}>
             Check again
           </button>
         </div>
       )}
 
-      <div className="transcript" ref={transcriptRef}>
-        {session.entries.length === 0 && (
-          <div className="empty">
-            Describe what to build or fix. The agent plans, edits files with patches, runs commands and verifies.
+      <div className="ui-transcript" ref={transcriptRef}>
+        {mode === 'ask' && askMessages.length === 0 && (
+          <div className="ui-chat-welcome">
+            <div className="ui-welcome-orb"><Icon name="lightbulb" size={22} /></div>
+            <h3>Ask anything about your project</h3>
+            <p>Answers stream from your model. Attach files with <kbd className="ui-kbd">@</kbd> to include their contents — Ask never edits files.</p>
           </div>
         )}
-        {session.entries.map((entry) => (
-          <div key={entry.id} className={`entry ${entry.kind} ${entry.status ?? ''}`}>
-            {entry.kind === 'assistant' && <div className="entry-label">anneal</div>}
-            {entry.kind === 'user' && <div className="entry-label">you</div>}
-            {entry.kind === 'tool' && (
-              <div className="entry-label">
-                <span className="tool-name">{entry.name}</span>
-                <span className={`badge ${entry.status === 'error' ? 'bad' : entry.status === 'ok' ? 'good' : ''}`}>
-                  {entry.status === 'running' ? 'running' : entry.status === 'error' ? 'error' : 'done'}
-                </span>
-              </div>
+        {mode === 'agent' && session.entries.length === 0 && (
+          <div className="ui-chat-welcome">
+            <div className="ui-welcome-orb"><Icon name="zap" size={22} /></div>
+            <h3>What should we build?</h3>
+            <p>Describe a goal. Anneal plans, edits files with patches, runs commands and verifies the result — every step is checkpointed and resumable.</p>
+            <div className="ui-suggestions">
+              {[
+                'Add input validation with tests',
+                'Refactor the auth module and update callers',
+                'Find and fix flaky tests',
+              ].map((text) => (
+                <button key={text} type="button" onClick={() => setGoal(text)}>{text}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {mode === 'spec' && (
+          <div className="ui-chat-welcome">
+            <div className="ui-welcome-orb"><Icon name="specs" size={22} /></div>
+            <h3>Specify it first</h3>
+            <p>Describe a feature. Anneal creates a spec with EARS requirements, a design and a task checklist. Execute tasks one at a time from the Specs view.</p>
+          </div>
+        )}
+
+        {mode === 'ask' && askMessages.map((message, index) => (
+          <div key={index} className={`ui-message ${message.role === 'user' ? 'user' : 'assistant'}`}>
+            {message.role === 'assistant' ? (
+              <><div className="ui-avatar bot"><Icon name="bot" size={14} /></div><div className="ui-bubble">{message.text}</div></>
+            ) : (
+              <><div className="ui-avatar user"><Icon name="user" size={13} /></div><div className="ui-bubble">{message.text}</div></>
             )}
-            {entry.args && <pre className="args">{entry.args}</pre>}
-            {entry.text && <pre className="entry-text">{entry.text}</pre>}
           </div>
         ))}
+        {mode !== 'ask' && session.entries.map((entry) => <AgentEntry key={entry.id} entry={entry} onOpenFile={onOpenFile} />)}
+
+        {mode !== 'ask' && session.result && (
+          <div className={`ui-result ${resultStatus ?? ''}`}>
+            <div className="ui-result-head">
+              <Icon name={resultStatus === 'completed' ? 'check' : resultStatus === 'failed' ? 'warning' : 'info'} size={14} />
+              <strong>{resultStatus}</strong>
+              <span className="ui-grow" />
+              <span className="ui-muted">{session.result.steps} steps · {session.result.toolCalls} tools</span>
+            </div>
+            <div className="ui-muted small">
+              {session.result.usage.promptTokens + session.result.usage.completionTokens} tokens
+              {session.result.resumable ? ' · resumable' : ''}
+            </div>
+          </div>
+        )}
+        {runSummary && (
+          <div className="ui-run-summary">
+            <div className="ui-section-label"><Icon name="sparkles" size={12} /> Run summary</div>
+            <pre>{runSummary}</pre>
+          </div>
+        )}
       </div>
 
-      {session.result && (
-        <div className={`result ${session.result.status}`}>
-          <div>
-            <strong>{session.result.status}</strong> · {session.result.steps} steps · {session.result.toolCalls} tool calls
-          </div>
-          <div className="muted small">
-            {session.result.usage.promptTokens + session.result.usage.completionTokens} tokens
-            {session.result.resumable ? ' · resumable' : ''}
-          </div>
-        </div>
-      )}
-
       {selectedFiles.length > 0 && (
-        <div className="chips">
+        <div className="ui-chips">
           {selectedFiles.map((file) => (
-            <span key={file} className="chip" title={file}>
-              {file.split('/').pop()}
-              <button onClick={() => onRemoveFile(file)} aria-label={`Remove ${file}`}>
-                ×
-              </button>
+            <span key={file} className="ui-chip" title={file}>
+              <Icon name="file" size={11} /> {file.split('/').pop()}
+              <button type="button" aria-label={`Remove ${file}`} onClick={() => onRemoveFile(file)}><Icon name="close" size={11} /></button>
             </span>
           ))}
         </div>
       )}
 
-      <div className="composer">
+      <div className="ui-composer">
+        {suggestions.length > 0 && (
+          <div className="ui-mention-menu">
+            <div className="ui-menu-head">Attach a file</div>
+            {suggestions.map((path) => (
+              <button key={path} type="button" onClick={() => insertFile(path)}>
+                <Icon name="file" size={13} /> <span>{path}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
+          ref={textareaRef}
           value={goal}
-          placeholder="e.g. Add a resumable task queue with retries and tests"
+          rows={3}
+          placeholder={
+            mode === 'ask' ? 'Ask a question… use @ to attach files' : mode === 'spec' ? 'Describe the feature to specify…' : 'Describe the goal… use @ to attach files'
+          }
           onChange={(event) => setGoal(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') submit();
+            if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+              event.preventDefault();
+              submit();
+            } else if (event.key === 'ArrowUp' && !goal.trim() && history.length) {
+              event.preventDefault();
+              const next = Math.min(history.length - 1, historyAt + 1);
+              setHistoryAt(next);
+              setGoal(history[next] ?? '');
+            } else if (event.key === 'ArrowDown' && historyAt >= 0) {
+              event.preventDefault();
+              const next = historyAt - 1;
+              setHistoryAt(next);
+              setGoal(next >= 0 ? (history[next] ?? '') : '');
+            }
           }}
-          rows={3}
         />
-        <div className="composer-actions">
+        <div className="ui-composer-actions">
+          <span className="ui-composer-hint">
+            <Icon name="paperclip" size={12} /> {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} attached
+          </span>
+          <span className="ui-grow" />
           {busy ? (
-            <button className="btn danger" onClick={onCancel}>
-              Stop
+            <button type="button" className="ui-btn danger small" onClick={onCancel}>
+              <Icon name="stop" size={12} /> Stop
             </button>
           ) : (
             <>
-              {session.result?.resumable && session.runId && (
-                <button className="btn ghost" onClick={onResume}>
-                  Resume
+              {mode === 'agent' && session.result?.resumable && session.runId && (
+                <button type="button" className="ui-btn ghost small" onClick={onResume}>
+                  <Icon name="history" size={13} /> Resume
                 </button>
               )}
-              <button className="btn primary" onClick={submit} disabled={!goal.trim()}>
-                Run agent
+              <button type="button" className="ui-btn primary small" disabled={!goal.trim()} onClick={submit}>
+                <Icon name={mode === 'agent' ? 'zap' : mode === 'spec' ? 'specs' : 'send'} size={13} />
+                {mode === 'ask' ? 'Ask' : mode === 'spec' ? 'Create spec' : 'Run agent'}
               </button>
             </>
           )}
         </div>
+        <div className="ui-composer-foot">
+          <span>{MODES.find((entry) => entry.key === mode)?.hint}</span>
+          <span className="ui-grow" />
+          <span className="ui-muted">{health?.config.model ?? 'no model'}</span>
+        </div>
       </div>
+      {activeChat && <div className="ui-chat-id" title={activeChat.id}>{activeChat.title}</div>}
     </section>
   );
 }

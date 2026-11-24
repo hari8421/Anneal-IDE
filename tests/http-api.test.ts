@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -8,6 +9,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 let child: ChildProcess | undefined;
 let baseUrl = '';
 let workspace = '';
+let home = '';
 
 async function waitForServer(url: string, attempts = 60): Promise<void> {
   for (let i = 0; i < attempts; i += 1) {
@@ -24,6 +26,7 @@ async function waitForServer(url: string, attempts = 60): Promise<void> {
 
 beforeAll(async () => {
   workspace = await tempDir('anneal-http-');
+  home = await tempDir('anneal-http-home-');
   await writeFiles(workspace, { 'src/existing.ts': 'export const existing = true;\n' });
   const port = 18_000 + Math.floor(Math.random() * 1000);
   baseUrl = `http://127.0.0.1:${port}`;
@@ -31,10 +34,13 @@ beforeAll(async () => {
     cwd: projectRoot,
     env: {
       ...process.env,
+      HOME: home,
       ANNEAL_WORKSPACE: workspace,
       ANNEAL_PORT: String(port),
       ANNEAL_HOST: '127.0.0.1',
       ANNEAL_MODEL: 'test-model',
+      // Point at an unreachable address so the health check always reports offline.
+      LMSTUDIO_BASE_URL: 'http://127.0.0.1:19999/v1',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -130,5 +136,82 @@ describe('HTTP API', () => {
     expect(Array.isArray(runs.runs)).toBe(true);
     const steering = (await (await fetch(`${baseUrl}/api/steering`)).json()) as { steering: unknown[] };
     expect(Array.isArray(steering.steering)).toBe(true);
+  });
+
+  it('searches workspace text through the HTTP API', async () => {
+    const response = await fetch(`${baseUrl}/api/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'existing', glob: 'src/**/*.ts' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      matches: Array<{ path: string; line: number; text: string }>;
+    };
+    expect(body.matches.some((match) => match.path === 'src/existing.ts')).toBe(true);
+  });
+
+  it('runs an allowlisted shell command through the HTTP API', async () => {
+    const response = await fetch(`${baseUrl}/api/terminal`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command: 'echo terminal-ok' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean; output: string };
+    expect(body.ok).toBe(true);
+    expect(body.output).toContain('terminal-ok');
+  });
+
+  it('renames a workspace file and notifies hooks', async () => {
+    const response = await fetch(`${baseUrl}/api/rename`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ from: 'src/existing.ts', to: 'src/renamed.ts' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { from: string; to: string };
+    expect(body.to).toBe('src/renamed.ts');
+    expect((await fetch(`${baseUrl}/api/file?path=src/renamed.ts`)).status).toBe(200);
+  });
+
+  it('switches the active workspace and remembers the choice', async () => {
+    const next = await tempDir('anneal-http-switch-');
+    await writeFiles(next, { 'src/second.ts': 'export const second = true;\n' });
+    const post = (folder: string) =>
+      fetch(`${baseUrl}/api/workspace`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: folder }),
+      });
+
+    const before = (await (await fetch(`${baseUrl}/api/workspace`)).json()) as { root: string };
+    expect(before.root).toBe(workspace);
+
+    const switched = await post(next);
+    expect(switched.status).toBe(200);
+    const switchedBody = (await switched.json()) as { root: string; preference: string };
+    expect(switchedBody.root).toBe(path.resolve(next));
+
+    const health = (await (await fetch(`${baseUrl}/api/health`)).json()) as {
+      config: { workspaceRoot: string };
+    };
+    expect(health.config.workspaceRoot).toBe(path.resolve(next));
+
+    const tree = (await (await fetch(`${baseUrl}/api/files`)).json()) as {
+      tree: Array<{ name: string }>;
+    };
+    expect(tree.tree.some((node) => node.name === 'second.ts')).toBe(false);
+    const nested = (await (await fetch(`${baseUrl}/api/files?path=src`)).json()) as {
+      tree: Array<{ name: string }>;
+    };
+    expect(nested.tree.some((node) => node.name === 'second.ts')).toBe(true);
+
+    const preference = JSON.parse(
+      await fs.readFile(path.join(home, '.anneal', 'workspace.json'), 'utf8'),
+    ) as { workspaceRoot: string };
+    expect(preference.workspaceRoot).toBe(path.resolve(next));
+
+    await post(workspace);
   });
 });

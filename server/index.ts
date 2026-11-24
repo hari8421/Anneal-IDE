@@ -1,9 +1,10 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer, finishShutdown } from './http';
+import { resolveLaunchWorkspace } from './workspace';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const WORKSPACE = path.resolve(process.env.ANNEAL_WORKSPACE ?? process.env.ANNEAL_ROOT ?? PROJECT_ROOT);
+const WORKSPACE = resolveLaunchWorkspace(PROJECT_ROOT)?.root ?? PROJECT_ROOT;
 
 async function start(): Promise<void> {
   const server = await createServer({

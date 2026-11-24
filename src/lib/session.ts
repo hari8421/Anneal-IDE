@@ -8,6 +8,7 @@ export interface LogEntry {
   args?: string;
   status?: 'running' | 'ok' | 'error';
   step?: number;
+  awaitingApproval?: boolean;
 }
 
 export interface SessionState {
@@ -89,7 +90,8 @@ export function applyEvent(state: SessionState, event: string, data: Record<stri
         name: String(payload.name ?? 'tool'),
         args: preview(payload.args, 600),
         text: '',
-        status: 'running',
+        status: payload.awaitingApproval ? 'running' : 'running',
+        awaitingApproval: payload.awaitingApproval === true,
         step: typeof data.step === 'number' ? data.step : undefined,
       });
     case 'tool.result':

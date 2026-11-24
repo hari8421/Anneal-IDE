@@ -3,7 +3,7 @@ import path from 'node:path';
 import { CheckpointStore } from './agent/checkpoints';
 import { RunJournal, listRuns, newRunId, type RunSummary } from './agent/journal';
 import { runAgent, type AgentEvent, type AgentResult } from './agent/loop';
-import { AGENT_SYSTEM_PROMPT, TASK_AGENT_PROMPT } from './agent/prompts';
+import { AGENT_SYSTEM_PROMPT, SUMMARY_SYSTEM_PROMPT, TASK_AGENT_PROMPT } from './agent/prompts';
 import type { ContextSection } from './context/builder';
 import { retrieveFiles } from './context/retrieval';
 import { annealPaths, loadConfig, resolveEndpoint, type Autonomy, type AnnealConfig } from './config';
@@ -327,6 +327,12 @@ export class AnnealService {
       const systemPrompt = request.taskId
         ? `${TASK_AGENT_PROMPT}\n\n${AGENT_SYSTEM_PROMPT.split('\n').slice(2).join('\n')}`
         : AGENT_SYSTEM_PROMPT;
+
+      const approve =
+        autonomy === 'supervised' && request.onEvent
+          ? this.makeApproveCallback(journal.id, request.onEvent)
+          : undefined;
+
       const result = await runAgent({
         client: this.client,
         journal,
@@ -345,6 +351,7 @@ export class AnnealService {
         signal: controller.signal,
         checkpoints: this.checkpoints,
         checkpointOnWrite: true,
+        approve,
         onEvent: request.onEvent,
       });
 
@@ -397,6 +404,11 @@ export class AnnealService {
     if (!controller) return false;
     controller.abort();
     return true;
+  }
+
+  /** Stop every in-flight run before swapping to a different workspace. */
+  cancelAllRuns(): void {
+    for (const runId of [...this.active.keys()]) this.cancelRun(runId);
   }
 
   isRunning(runId: string): boolean {
@@ -535,6 +547,169 @@ export class AnnealService {
 
   async steeringFiles() {
     return loadSteering(annealPaths(this.config.workspaceRoot).steering);
+  }
+
+  async writeSteering(name: string, content: string): Promise<void> {
+    const dir = annealPaths(this.config.workspaceRoot).steering;
+    await fs.mkdir(dir, { recursive: true });
+    // Sanitise: only alphanumerics, hyphens, underscores — no path traversal
+    const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'steering';
+    const file = path.join(dir, `${safe}.md`);
+    await fs.writeFile(file, content, 'utf8');
+  }
+
+  async deleteSteering(name: string): Promise<boolean> {
+    const dir = annealPaths(this.config.workspaceRoot).steering;
+    const safe = name.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/^-+|-+$/g, '');
+    if (!safe) return false;
+    const file = path.join(dir, `${safe}.md`);
+    // ensure it stays inside the steering directory
+    if (!file.startsWith(dir + path.sep) && file !== path.join(dir, `${safe}.md`)) return false;
+    try {
+      await fs.rm(file);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Generate a brief summary of a completed run using the SUMMARY_SYSTEM_PROMPT.
+   * Returns null if the run journal is empty or the LLM call fails.
+   */
+  async summariseRun(runId: string): Promise<string | null> {
+    try {
+      const journal = await RunJournal.open(annealPaths(this.config.workspaceRoot).runs, runId);
+      const events = journal.all;
+      if (!events.length) return null;
+
+      // Build a terse transcript for the summariser
+      const lines: string[] = [];
+      for (const entry of events) {
+        if (entry.type === 'assistant') {
+          const data = entry.data as { content?: string } | undefined;
+          if (data?.content) lines.push(`ASSISTANT: ${data.content.slice(0, 400)}`);
+        } else if (entry.type === 'tool.result') {
+          const data = entry.data as { name?: string; ok?: boolean; content?: string } | undefined;
+          if (data) lines.push(`TOOL ${data.name ?? '?'} (${data.ok ? 'ok' : 'fail'}): ${(data.content ?? '').slice(0, 200)}`);
+        } else if (entry.type === 'run.end') {
+          const data = entry.data as { status?: string; message?: string } | undefined;
+          if (data) lines.push(`STATUS: ${data.status} — ${data.message ?? ''}`);
+        }
+      }
+
+      const transcript = lines.slice(0, 60).join('\n');
+      const result = await this.client.chat({
+        messages: [
+          { role: 'system', content: SUMMARY_SYSTEM_PROMPT },
+          { role: 'user', content: `Run transcript:\n\n${transcript}\n\nSummarise this run now.` },
+        ],
+        stream: false,
+      });
+      return result.content.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Inline edit: generate a targeted patch for the selected text in `file`
+   * using the user's instruction. Returns the patched content (whole file) and
+   * the diff as SEARCH/REPLACE blocks so the UI can preview and accept/reject.
+   */
+  async inlineEdit(
+    filePath: string,
+    selection: string,
+    instruction: string,
+    signal?: AbortSignal,
+  ): Promise<{ patched: string; original: string; patch: string; file: string }> {
+    const absolute = resolveInWorkspace(this.config.workspaceRoot, filePath);
+    const original = await fs.readFile(absolute, 'utf8');
+
+    const systemPrompt = `You are an inline code editor. The user selected a region of a file and gave an instruction. 
+Output ONLY a SEARCH/REPLACE block in this exact format:
+<<<<<<< SEARCH
+<exact text to replace — must match the selection verbatim>
+=======
+<replacement text>
+>>>>>>> REPLACE
+No explanation, no markdown, no preamble. Just the block.`;
+
+    const userPrompt = `File: ${filePath}
+
+Selected text:
+\`\`\`
+${selection}
+\`\`\`
+
+Instruction: ${instruction}
+
+Output the SEARCH/REPLACE block now.`;
+
+    const result = await this.client.chat({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      stream: false,
+      signal,
+    });
+
+    const patchText = result.content.trim();
+
+    // Apply the patch to get the modified file content
+    const { applyPatch, parsePatch } = await import('./agent/patch');
+    let patched = original;
+    let usedPatch = patchText;
+    try {
+      const blocks = parsePatch(patchText);
+      const applied = applyPatch(original, blocks);
+      patched = applied.content;
+    } catch {
+      // If patch parse fails, return original — UI will show no diff
+      usedPatch = '';
+    }
+
+    return { patched, original, patch: usedPatch, file: filePath };
+  }
+
+  /** Pending approval requests for supervised runs: runId → resolve function */
+  private readonly approvals = new Map<string, (approved: boolean) => void>();
+
+  /** Called by the HTTP layer when the user approves or rejects a supervised tool call. */
+  resolveApproval(runId: string, approved: boolean): boolean {
+    const resolve = this.approvals.get(runId);
+    if (!resolve) return false;
+    this.approvals.delete(runId);
+    resolve(approved);
+    return true;
+  }
+
+  /**
+   * Returns an approve callback suitable for supervised mode that emits an SSE
+   * event and waits for the user's response (up to 5 minutes).
+   */
+  makeApproveCallback(
+    runId: string,
+    onEvent: (event: AgentEvent) => void,
+  ): (request: { tool: string; args: Record<string, unknown> }) => Promise<boolean> {
+    return (request) =>
+      new Promise((resolve) => {
+        this.approvals.set(runId, resolve);
+        // Emit a special event the SSE stream carries to the browser
+        onEvent({
+          type: 'tool.call' as const,
+          runId,
+          data: { name: request.tool, args: request.args, awaitingApproval: true },
+        });
+        // Auto-reject after 5 minutes to avoid hanging runs
+        setTimeout(() => {
+          if (this.approvals.has(runId)) {
+            this.approvals.delete(runId);
+            resolve(false);
+          }
+        }, 5 * 60 * 1000);
+      });
   }
 
   async ensureWorkspace(): Promise<void> {

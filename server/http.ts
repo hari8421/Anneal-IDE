@@ -6,7 +6,13 @@ import { DebugSession, type DebugAction } from './debug/session';
 import { collectSources } from './intel/sources';
 import { createService, type AnnealService } from './service';
 import { loadSteering } from './steering/steering';
+import { checkCommandAllowed, runCommandTool, searchTool, type ToolContext } from './tools';
 import { PathEscapeError, isIgnoredPath, resolveInWorkspace, toRelative } from './util/paths';
+import {
+  expandWorkspacePath,
+  readWorkspacePreference,
+  writeWorkspacePreference,
+} from './workspace';
 
 export interface ServerOptions {
   workspace: string;
@@ -101,6 +107,14 @@ function strArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
 }
 
+function toolContext(): ToolContext {
+  return {
+    workspaceRoot: workspaceRoot(),
+    allowCommands: service.config.allowCommands,
+    commandTimeoutMs: service.config.commandTimeoutMs,
+  };
+}
+
 function languageFor(file: string): string {
   const ext = path.extname(file).toLowerCase();
   const map: Record<string, string> = {
@@ -169,7 +183,7 @@ function registerRoutes(): void {
   });
 
   route('GET', '/api/intel/sources', async ({ res }) => {
-    json(res, 200, await collectSources(WORKSPACE));
+    json(res, 200, await collectSources(workspaceRoot()));
   });
 
   route('GET', '/api/debug/state', async ({ res }) => {
@@ -190,7 +204,7 @@ function registerRoutes(): void {
       return;
     }
     await stopDebugSession();
-    const session = new DebugSession(WORKSPACE);
+    const session = new DebugSession(workspaceRoot());
     try {
       await session.start({
         script,
@@ -264,6 +278,40 @@ function registerRoutes(): void {
     }
   });
 
+  route('GET', '/api/workspace', async ({ res }) => {
+    json(res, 200, { root: workspaceRoot(), preference: readWorkspacePreference() ?? null });
+  });
+
+  route('POST', '/api/workspace', async ({ req, res }) => {
+    const body = await readJson(req);
+    const raw = text(body.path).trim();
+    if (!raw || (!raw.startsWith('/') && !raw.startsWith('~') && !/^[A-Za-z]:[\\/]/.test(raw))) {
+      json(res, 400, { error: 'Provide an absolute folder path' });
+      return;
+    }
+    const requested = expandWorkspacePath(raw);
+    let stat;
+    try {
+      stat = await fs.stat(requested);
+    } catch {
+      json(res, 400, { error: `Folder not found: ${raw}` });
+      return;
+    }
+    if (!stat.isDirectory()) {
+      json(res, 400, { error: `Not a folder: ${raw}` });
+      return;
+    }
+
+    if (requested !== workspaceRoot()) {
+      await stopDebugSession();
+      service.cancelAllRuns();
+      await service.closeMcp().catch(() => undefined);
+      writeWorkspacePreference(requested);
+      service = await createService(requested);
+    }
+    json(res, 200, { root: workspaceRoot(), preference: readWorkspacePreference() ?? null });
+  });
+
   route('POST', '/api/config', async ({ req, res }) => {
     const body = await readJson(req);
     const patch: Record<string, unknown> = {};
@@ -285,8 +333,8 @@ function registerRoutes(): void {
   route('GET', '/api/files', async ({ res, url }) => {
     const requested = url.searchParams.get('path') ?? '';
     const depth = Number(url.searchParams.get('depth') ?? 3);
-    const tree = await listTree(WORKSPACE, requested, 0, Math.min(6, Math.max(0, depth)));
-    json(res, 200, { root: WORKSPACE, path: requested, tree });
+    const tree = await listTree(workspaceRoot(), requested, 0, Math.min(6, Math.max(0, depth)));
+    json(res, 200, { root: workspaceRoot(), path: requested, tree });
   });
 
   route('GET', '/api/file', async ({ res, url }) => {
@@ -295,7 +343,7 @@ function registerRoutes(): void {
       json(res, 400, { error: 'path is required' });
       return;
     }
-    const absolute = resolveInWorkspace(WORKSPACE, requested);
+    const absolute = resolveInWorkspace(workspaceRoot(), requested);
     try {
       const stat = await fs.stat(absolute);
       if (stat.size > 2_000_000) {
@@ -303,7 +351,7 @@ function registerRoutes(): void {
         return;
       }
       const content = await fs.readFile(absolute, 'utf8');
-      json(res, 200, { path: toRelative(WORKSPACE, absolute), content, language: languageFor(requested), size: stat.size });
+      json(res, 200, { path: toRelative(workspaceRoot(), absolute), content, language: languageFor(requested), size: stat.size });
     } catch {
       json(res, 404, { error: `File not found: ${requested}` });
     }
@@ -316,10 +364,10 @@ function registerRoutes(): void {
       json(res, 400, { error: 'path is required' });
       return;
     }
-    const absolute = resolveInWorkspace(WORKSPACE, requested);
+    const absolute = resolveInWorkspace(workspaceRoot(), requested);
     await fs.mkdir(path.dirname(absolute), { recursive: true });
     await fs.writeFile(absolute, text(body.content), 'utf8');
-    const saved = toRelative(WORKSPACE, absolute);
+    const saved = toRelative(workspaceRoot(), absolute);
     const hooks = await service.notifyFileEvent('fileEdited', saved);
     json(res, 200, { path: saved, hooks });
   });
@@ -331,10 +379,10 @@ function registerRoutes(): void {
       json(res, 400, { error: 'path is required' });
       return;
     }
-    const absolute = resolveInWorkspace(WORKSPACE, requested);
+    const absolute = resolveInWorkspace(workspaceRoot(), requested);
     if (body.kind === 'dir') {
       await fs.mkdir(absolute, { recursive: true });
-      json(res, 200, { path: toRelative(WORKSPACE, absolute), type: 'dir' });
+      json(res, 200, { path: toRelative(workspaceRoot(), absolute), type: 'dir' });
       return;
     }
     await fs.mkdir(path.dirname(absolute), { recursive: true });
@@ -342,7 +390,7 @@ function registerRoutes(): void {
       if (error.code === 'EEXIST') throw new Error('A file with that name already exists');
       throw error;
     });
-    const created = toRelative(WORKSPACE, absolute);
+    const created = toRelative(workspaceRoot(), absolute);
     const hooks = await service.notifyFileEvent('fileCreated', created);
     json(res, 200, { path: created, type: 'file', hooks });
   });
@@ -353,11 +401,93 @@ function registerRoutes(): void {
       json(res, 400, { error: 'path is required' });
       return;
     }
-    const absolute = resolveInWorkspace(WORKSPACE, requested);
+    const absolute = resolveInWorkspace(workspaceRoot(), requested);
     await fs.rm(absolute, { recursive: true, force: true });
-    const deleted = toRelative(WORKSPACE, absolute);
+    const deleted = toRelative(workspaceRoot(), absolute);
     const hooks = await service.notifyFileEvent('fileDeleted', deleted);
     json(res, 200, { path: deleted, hooks });
+  });
+
+  route('POST', '/api/search', async ({ req, res }) => {
+    const body = await readJson(req);
+    const query = text(body.query).trim();
+    if (!query) {
+      json(res, 400, { error: 'query is required' });
+      return;
+    }
+    const result = await searchTool.run(
+      {
+        query,
+        ...(typeof body.glob === 'string' && body.glob.trim() ? { glob: body.glob.trim() } : {}),
+        regex: body.regex === true,
+        limit: typeof body.limit === 'number' ? body.limit : 120,
+      },
+      toolContext(),
+    );
+    if (!result.ok) {
+      json(res, 400, { error: result.content, matches: [] });
+      return;
+    }
+    const matches = result.content
+      .split('\n')
+      .flatMap((line) => {
+        const found = line.match(/^(.+?):(\d+): (.*)$/);
+        return found ? [{ path: found[1]!, line: Number(found[2]), text: found[3]! }] : [];
+      });
+    json(res, 200, { query, matches, truncated: result.content.includes('[output truncated') });
+  });
+
+  route('POST', '/api/terminal', async ({ req, res }) => {
+    if (!service.config.allowCommands) {
+      json(res, 403, { error: 'Shell commands are disabled in Settings.' });
+      return;
+    }
+    const body = await readJson(req);
+    const command = text(body.command).trim();
+    if (!command) {
+      json(res, 400, { error: 'command is required' });
+      return;
+    }
+    const verdict = checkCommandAllowed(command);
+    if (!verdict.allowed) {
+      json(res, 400, { error: `Command blocked (${verdict.reason}).` });
+      return;
+    }
+    const result = await runCommandTool.run(
+      { command, ...(typeof body.cwd === 'string' && body.cwd.trim() ? { cwd: body.cwd.trim() } : {}) },
+      toolContext(),
+    );
+    json(res, result.ok ? 200 : 400, { ok: result.ok, output: result.content });
+  });
+
+  route('POST', '/api/rename', async ({ req, res }) => {
+    const body = await readJson(req);
+    const from = text(body.from).trim();
+    const to = text(body.to).trim();
+    if (!from || !to) {
+      json(res, 400, { error: 'from and to are required' });
+      return;
+    }
+    const source = resolveInWorkspace(workspaceRoot(), from);
+    const target = resolveInWorkspace(workspaceRoot(), to);
+    if (source === target) {
+      json(res, 400, { error: 'Source and destination are the same path' });
+      return;
+    }
+    try {
+      await fs.stat(target);
+      json(res, 409, { error: `${to} already exists` });
+      return;
+    } catch {
+      // destination does not exist — good
+    }
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.rename(source, target);
+    const renamedFrom = toRelative(workspaceRoot(), source);
+    const renamedTo = toRelative(workspaceRoot(), target);
+    await service.notifyFileEvent('fileDeleted', renamedFrom);
+    await service.notifyFileEvent('fileCreated', renamedTo);
+    json(res, 200, { from: renamedFrom, to: renamedTo });
   });
 
   route('POST', '/api/chat', async ({ req, res }) => {
@@ -586,8 +716,60 @@ function registerRoutes(): void {
   });
 
   route('GET', '/api/steering', async ({ res }) => {
-    const files = await loadSteering(path.join(WORKSPACE, '.anneal', 'steering'));
-    json(res, 200, { steering: files.map(({ name, inclusion, globs, content }) => ({ name, inclusion, globs, length: content.length })) });
+    const files = await loadSteering(path.join(workspaceRoot(), '.anneal', 'steering'));
+    json(res, 200, { steering: files.map(({ name, inclusion, globs, content }) => ({ name, inclusion, globs, length: content.length, content })) });
+  });
+
+  route('POST', '/api/steering', async ({ req, res }) => {
+    const body = await readJson(req);
+    const name = text(body.name).trim();
+    const content = text(body.content);
+    if (!name) {
+      json(res, 400, { error: 'name is required' });
+      return;
+    }
+    await service.writeSteering(name, content);
+    json(res, 200, { ok: true, name });
+  });
+
+  route('DELETE', '/api/steering/:name', async ({ res, params }) => {
+    const removed = await service.deleteSteering(params.name ?? '');
+    json(res, removed ? 200 : 404, { removed });
+  });
+
+  route('POST', '/api/runs/:id/approve', async ({ req, res, params }) => {
+    const body = await readJson(req);
+    const approved = body.approved !== false;
+    const resolved = service.resolveApproval(params.id!, approved);
+    json(res, resolved ? 200 : 404, { resolved, approved });
+  });
+
+  route('GET', '/api/runs/:id/summary', async ({ res, params }) => {
+    try {
+      const summary = await service.summariseRun(params.id!);
+      json(res, 200, { summary });
+    } catch (error) {
+      json(res, 500, { error: (error as Error).message, summary: null });
+    }
+  });
+
+  route('POST', '/api/inline-edit', async ({ req, res }) => {
+    const body = await readJson(req);
+    const filePath = text(body.file).trim();
+    const selection = text(body.selection);
+    const instruction = text(body.instruction).trim();
+    if (!filePath || !instruction) {
+      json(res, 400, { error: 'file and instruction are required' });
+      return;
+    }
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+    try {
+      const result = await service.inlineEdit(filePath, selection, instruction, controller.signal);
+      json(res, 200, result);
+    } catch (error) {
+      json(res, 500, { error: (error as Error).message });
+    }
   });
 }
 
@@ -604,13 +786,17 @@ const CONTENT_TYPES: Record<string, string> = {
 
 const PORT = Number(process.env.ANNEAL_PORT ?? 8787);
 const HOST = process.env.ANNEAL_HOST ?? '127.0.0.1';
-const WORKSPACE = path.resolve(process.env.ANNEAL_WORKSPACE ?? process.env.ANNEAL_ROOT ?? process.cwd());
 // Resolved lazily-ish: the desktop bundle passes an explicit directory, and the
 // dev server serves ./dist from the project root.
 const EMBEDDED_DIST = process.env.ANNEAL_EMBEDDED_DIST ?? path.join(process.cwd(), 'dist');
 
 let service: AnnealService;
 let debugSession: DebugSession | null = null;
+
+/** Always use the live service root: the workspace can be switched at runtime. */
+function workspaceRoot(): string {
+  return service.config.workspaceRoot;
+}
 
 function parseBreakpoints(value: unknown): Array<{ path: string; line: number }> {
   if (!Array.isArray(value)) return [];

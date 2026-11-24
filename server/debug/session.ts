@@ -1,6 +1,8 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveInWorkspace, toRelative } from '../util/paths';
 
 /**
@@ -130,6 +132,36 @@ function formatRemote(value: Record<string, unknown> | undefined): string {
 }
 
 /**
+ * V8 reports script URLs through the filesystem's real paths. On macOS a
+ * temp path under /var is parsed as /private/var, so comparing it with the
+ * requested path leaves breakpoints unverified and they never fire.
+ */
+function canonicalPath(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return path.resolve(target);
+  }
+}
+
+function fileUrlToLocalPath(url: string): string | null {
+  if (!url.startsWith('file://')) return null;
+  try {
+    return fileURLToPath(url);
+  } catch {
+    return null;
+  }
+}
+
+function relativeScriptPath(workspace: string, url: string): string | null {
+  const local = fileUrlToLocalPath(url);
+  if (!local) return null;
+  const relative = toRelative(canonicalPath(workspace), canonicalPath(local));
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return relative;
+}
+
+/**
  * A pkg build embeds node but exposes no built-in executable to spawn, and plain
  * PATH lookup fails inside the snapshot bootstrap, so try absolute paths first.
  */
@@ -173,6 +205,7 @@ export class DebugSession {
   private stderrBuffer = '';
   private readonly breakpointIds = new Map<string, number>();
   private readonly scriptUrls = new Map<string, string>();
+  private readonly scriptsByPath = new Map<string, string>();
   private pauseSeq = 0;
 
   constructor(private readonly workspace: string) {}
@@ -327,7 +360,10 @@ export class DebugSession {
     cdp.on('Debugger.scriptParsed', (params) => {
       const scriptId = String(params.scriptId ?? '');
       if (!scriptId) return;
-      this.scriptUrls.set(scriptId, typeof params.url === 'string' ? params.url : '');
+      const url = typeof params.url === 'string' ? params.url : '';
+      this.scriptUrls.set(scriptId, url);
+      const local = fileUrlToLocalPath(url);
+      if (local) this.scriptsByPath.set(canonicalPath(local), scriptId);
     });
 
     cdp.on('Debugger.paused', (params) => {
@@ -341,7 +377,7 @@ export class DebugSession {
         return {
           id: String(frame.callFrameId ?? ''),
           functionName: String(frame.functionName || '(anonymous)'),
-          path: url.startsWith('file://') ? toRelative(this.workspace, decodeURIComponent(url.replace(/^file:\/\//, ''))) : null,
+          path: relativeScriptPath(this.workspace, url),
           line: (location.lineNumber ?? 0) + 1,
           column: (location.columnNumber ?? 0) + 1,
         };
@@ -439,24 +475,42 @@ export class DebugSession {
   private async applyBreakpoints(list: Array<{ path: string; line: number }>): Promise<void> {
     const cdp = this.cdp;
     if (!cdp) return;
+    this.breakpointIds.clear();
     const resolved: DebugBreakpoint[] = [];
     for (const breakpoint of list) {
       const absolute = resolveInWorkspace(this.workspace, breakpoint.path);
+      const displayPath = toRelative(this.workspace, absolute);
+      const canonical = canonicalPath(absolute);
+      const scriptId = this.scriptsByPath.get(canonical);
+      let breakpointId = '';
+      let verified = false;
       try {
-        const result = (await cdp.send('Debugger.setBreakpointByUrl', {
-          url: pathToFileURL(absolute).href,
-          lineNumber: Math.max(0, breakpoint.line - 1),
-          columnNumber: 0,
-        })) as { breakpointId?: string; locations?: unknown[] };
-        if (result.breakpointId) this.breakpointIds.set(result.breakpointId, resolved.length);
-        resolved.push({
-          path: toRelative(this.workspace, absolute),
-          line: breakpoint.line,
-          verified: Array.isArray(result.locations) && result.locations.length > 0,
-        });
+        if (scriptId) {
+          // Prefer script ids: they survive symlinked workspace paths and URL
+          // encoding differences between the editor and V8.
+          const result = (await cdp.send('Debugger.setBreakpoint', {
+            location: {
+              scriptId,
+              lineNumber: Math.max(0, breakpoint.line - 1),
+              columnNumber: 0,
+            },
+          })) as { breakpointId?: string; actualLocation?: unknown };
+          breakpointId = String(result.breakpointId ?? '');
+          verified = Boolean(result.actualLocation);
+        } else {
+          const result = (await cdp.send('Debugger.setBreakpointByUrl', {
+            url: pathToFileURL(canonical).href,
+            lineNumber: Math.max(0, breakpoint.line - 1),
+            columnNumber: 0,
+          })) as { breakpointId?: string; locations?: unknown[] };
+          breakpointId = String(result.breakpointId ?? '');
+          verified = Array.isArray(result.locations) && result.locations.length > 0;
+        }
       } catch {
-        resolved.push({ path: toRelative(this.workspace, absolute), line: breakpoint.line, verified: false });
+        // Keep the breakpoint visible even when V8 cannot verify it yet.
       }
+      if (breakpointId) this.breakpointIds.set(breakpointId, resolved.length);
+      resolved.push({ path: displayPath, line: breakpoint.line, verified });
     }
     this.state.breakpoints = resolved;
   }

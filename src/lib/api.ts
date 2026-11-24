@@ -159,6 +159,13 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<Health>('/api/health'),
+  workspace: () => request<{ root: string; preference: string | null }>('/api/workspace'),
+  setWorkspace: (path: string) =>
+    request<{ root: string; preference: string | null }>('/api/workspace', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }),
+    }),
   memory: () => request<MemorySnapshot>('/api/memory'),
   addMemoryFact: (key: string, value: string) =>
     request<MemoryFact>('/api/memory/facts', {
@@ -232,9 +239,70 @@ export const api = {
         body: JSON.stringify({ event, path }),
       },
     ),
-  steering: () => request<{ steering: Array<{ name: string; inclusion: string; globs: string[] }> }>('/api/steering'),
+  steering: () => request<{ steering: Array<{ name: string; inclusion: string; globs: string[]; content: string; length: number }> }>('/api/steering'),
+  writeSteering: (name: string, content: string) =>
+    request<{ ok: boolean; name: string }>('/api/steering', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, content }),
+    }),
+  deleteSteering: (name: string) =>
+    request<{ removed: boolean }>(`/api/steering/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  approveToolCall: (runId: string, approved: boolean) =>
+    request<{ resolved: boolean; approved: boolean }>(`/api/runs/${encodeURIComponent(runId)}/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ approved }),
+    }),
+  runSummary: (runId: string) =>
+    request<{ summary: string | null }>(`/api/runs/${encodeURIComponent(runId)}/summary`),
+  inlineEdit: (file: string, selection: string, instruction: string) =>
+    request<{ patched: string; original: string; patch: string; file: string }>('/api/inline-edit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ file, selection, instruction }),
+    }),
   mcp: () => request<{ servers: string[]; tools: string[] }>('/api/mcp'),
   connectMcp: () => request<{ servers: Array<{ server: string; ok: boolean; tools?: number; error?: string }> }>('/api/mcp/connect', { method: 'POST' }),
+  search: (query: string, options: { glob?: string; regex?: boolean; limit?: number } = {}) =>
+    request<{ query: string; matches: SearchMatch[]; truncated: boolean }>('/api/search', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query, ...options }),
+    }),
+  terminal: (command: string, cwd?: string) =>
+    request<TerminalResult>('/api/terminal', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ command, ...(cwd ? { cwd } : {}) }),
+    }),
+  rename: (from: string, to: string) =>
+    request<{ from: string; to: string }>('/api/rename', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ from, to }),
+    }),
+  chatStream: async (
+    messages: Array<{ role: ChatRole; content: string }>,
+    onDelta: (text: string) => void,
+    signal?: AbortSignal,
+  ): Promise<string> => {
+    let content = '';
+    await stream(
+      '/api/chat',
+      { messages },
+      (event, data) => {
+        if (event === 'delta') {
+          const chunk = String(data.text ?? '');
+          content += chunk;
+          onDelta(chunk);
+        }
+        if (event === 'error') throw new Error(String(data.message ?? 'Chat failed'));
+      },
+      signal,
+    );
+    return content;
+  },
   sources: () => request<SourceBundle>('/api/intel/sources'),
   debugState: () => request<DebugState>('/api/debug/state'),
   debugStart: (script: string, breakpoints: Array<{ path: string; line: number }>) =>
@@ -303,6 +371,19 @@ export interface DebugState {
   exitCode?: number | null;
   error?: string;
 }
+
+export interface SearchMatch {
+  path: string;
+  line: number;
+  text: string;
+}
+
+export interface TerminalResult {
+  ok: boolean;
+  output: string;
+}
+
+export type ChatRole = 'system' | 'user' | 'assistant';
 
 export type StreamHandler = (event: string, data: Record<string, unknown>) => void;
 
