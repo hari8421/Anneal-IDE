@@ -111,6 +111,15 @@ try {
       OUT_PATH,
       '--options',
       'experimental-require-module',
+      // Bytecode compilation makes pkg *spawn* the target-architecture Node
+      // binary. When the target arch is not the host's (an arm64 Mac building
+      // linux-x64/win-x64 here), that spawn dies with EBADARCH — the opaque
+      // "spawn Unknown system error -86". Without bytecode pkg only copies
+      // files, so cross-building from any host works.
+      '--no-bytecode',
+      '--public',
+      '--public-packages',
+      '*',
     ],
     { cwd: ROOT, stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' } },
   );

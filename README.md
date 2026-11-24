@@ -98,6 +98,22 @@ servers and CI. The macOS binary is cross-built and unsigned, so run
 `ANNEAL_DESKTOP_TARGETS=node24-linux-x64` narrows the build, `ANNEAL_DESKTOP_SKIP_PKG=1` stops after
 staging the bundle (useful in CI), and `ANNEAL_PORT` / `ANNEAL_WORKSPACE` behave as they do in dev.
 
+Each target needs a Node base binary that `@yao-pkg/pkg` can still download; if one is missing from
+its cache, pkg quietly falls back to *compiling Node from source* (tens of minutes). Check the
+`pkg-fetch` release assets if a build seems to hang there.
+
+#### `spawn Unknown system error -86` while packaging
+
+On macOS this is `EBADARCH`: a binary built for the other CPU tried to run. `pkg` compiles V8
+bytecode by *spawning* the target-architecture Node binary, so one run that cross-builds several
+arches — the default target list does — hits it as soon as a target differs from the host (for
+example linux-x64 or win-x64 from an arm64 Mac, or macOS-arm64 from an Intel one).
+
+The packer passes `--no-bytecode`, which turns the step into pure file copying and removes the spawn
+entirely, so all three binaries build from any host. Keep it in place rather than re-enabling
+bytecode for speed: the binaries are slightly larger, and in exchange cross-arch builds stop crashing.
+If pkg is still wedged, clear a half-written base binary with `rm -rf ~/.pkg-cache` and rerun.
+
 ### Using a different host/port for LM Studio
 
 `.anneal/config.json`:
