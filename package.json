@@ -17,6 +17,8 @@
     "test:watch": "vitest",
     "start": "tsx server/index.ts",
     "build-desktop": "npm run build && node scripts/build-desktop.mjs",
+    "build-app": "node scripts/build-macos-app.mjs",
+    "build:app": "npm run build-app",
     "start-desktop": "ANNEAL_EMBEDDED_DIST=dist ANNEAL_PORT=8787 ANNEAL_WORKSPACE=. node server/index.ts"
   },
   "dependencies": {

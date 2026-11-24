@@ -79,10 +79,33 @@ npm run build
 npm start          # http://127.0.0.1:8787
 ```
 
-### Desktop app
+### Standalone macOS app
 
-Build standalone executables that bundle the server *and* the UI, so the target machine needs no
-Node install:
+`npm run build` only produces the web assets in `dist/`; it is not the desktop build. To build the
+real standalone app:
+
+```bash
+npm run build-app
+open "app-out/Anneal IDE.app"
+```
+
+`app-out/Anneal IDE.app` is a native macOS app: it embeds the local server and UI, opens its own
+window, and does **not** depend on Chrome or a browser. On first launch it shows a native folder
+picker; the chosen folder is remembered in `~/.anneal/workspace.json`. It can also be launched with
+an explicit folder:
+
+```bash
+open "app-out/Anneal IDE.app" --args --workspace /path/to/project
+```
+
+The app uses a free loopback port automatically, so multiple copies/projects can run side by side.
+Server output is written to `~/Library/Logs/Anneal IDE/server.log`. You can change the workspace at
+any time from **Settings → Workspace** in the IDE.
+
+### Headless / CLI binaries
+
+If you want the server without a native window, `npm run build-desktop` produces standalone
+executables that bundle the server *and* the UI:
 
 ```bash
 npm run build-desktop     # typecheck + vite build + three binaries in pkg-out/anneal/
@@ -90,13 +113,11 @@ npm run build-desktop     # typecheck + vite build + three binaries in pkg-out/a
 ```
 
 One `pkg` run produces `anneal-ide-linux-x64`, `anneal-ide-macos-arm64` and
-`anneal-ide-win-x64.exe`. The binary serves the app on <http://127.0.0.1:8787> and opens your default
-browser at it, so a double-click behaves like an app; set `ANNEAL_NO_OPEN=1` to keep it headless for
-servers and CI. The macOS binary is cross-built and unsigned, so run
-`codesign --sign - pkg-out/anneal/anneal-ide-macos-arm64` before launching it there.
+`anneal-ide-win-x64.exe`. Those binaries serve the app on <http://127.0.0.1:8787> and open your
+default browser at it; set `ANNEAL_NO_OPEN=1` to keep them headless for servers and CI.
 
-The app always opens one explicit project folder — it never silently falls back to the directory it
-was launched from. Choose it in any of these ways:
+For the CLI binaries the workspace can be specified with a positional path, `--workspace`, or
+`ANNEAL_WORKSPACE`:
 
 ```bash
 ./pkg-out/anneal/anneal-ide-macos-arm64 /path/to/project
@@ -104,13 +125,10 @@ was launched from. Choose it in any of these ways:
 ANNEAL_WORKSPACE=/path/to/project ./pkg-out/anneal/anneal-ide-macos-arm64
 ```
 
-On a fresh double-click, macOS shows a native folder picker. The chosen folder is saved to
-`~/.anneal/workspace.json` and reused next time. You can also change it at any time from
-**Settings → Workspace** in the IDE; switching folders stops active runs and loads that project's
-specs, runs and settings.
-
-`ANNEAL_DESKTOP_TARGETS=node24-linux-x64` narrows the build, `ANNEAL_DESKTOP_SKIP_PKG=1` stops after
-staging the bundle (useful in CI), and `ANNEAL_PORT` behaves as it does in dev.
+They never silently fall back to the launch directory; on a fresh double-click macOS shows a native
+folder picker. `ANNEAL_DESKTOP_TARGETS=node24-linux-x64` narrows the build,
+`ANNEAL_DESKTOP_SKIP_PKG=1` stops after staging the bundle, and `ANNEAL_PORT` behaves as it does in
+dev. `ANNEAL_APP_SKIP_PKG=1` skips the pkg stage when rebuilding only the native app wrapper.
 
 Each target needs a Node base binary that `@yao-pkg/pkg` can still download; if one is missing from
 its cache, pkg quietly falls back to *compiling Node from source* (tens of minutes). Check the

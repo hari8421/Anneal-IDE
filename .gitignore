@@ -5,6 +5,8 @@ coverage/
 
 # Desktop build artifacts
 pkg-out/
+app-out/
+.macos-app-build/
 .desktop-pkg-dist/
 .desktop-entry.ts
 
