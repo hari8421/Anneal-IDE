@@ -4,7 +4,10 @@ export type ChatMode = 'ask' | 'agent' | 'spec';
 
 export interface AskMessage {
   role: 'user' | 'assistant';
+  /** Text shown in the transcript. */
   text: string;
+  /** Full prompt sent to the model; includes attached file contents for user turns. */
+  content?: string;
 }
 
 /** One saved conversation. Agent transcripts are replayed from their session state;
@@ -58,10 +61,15 @@ function revive(raw: unknown): ChatRecord | null {
     updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : Date.now(),
     session,
     askMessages: Array.isArray(value.askMessages)
-      ? value.askMessages.filter(
-          (message): message is AskMessage =>
-            Boolean(message) && (message.role === 'user' || message.role === 'assistant') && typeof message.text === 'string',
-        )
+      ? value.askMessages
+          .filter(
+            (message): message is AskMessage =>
+              Boolean(message) && (message.role === 'user' || message.role === 'assistant') && typeof message.text === 'string',
+          )
+          .map((message) => ({
+            ...message,
+            ...(typeof message.content === 'string' ? { content: message.content } : {}),
+          }))
       : [],
   };
 }

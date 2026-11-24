@@ -324,6 +324,7 @@ function registerRoutes(): void {
     if (typeof body.contextBudgetTokens === 'number') patch.contextBudgetTokens = body.contextBudgetTokens;
     if (body.autonomy === 'autopilot' || body.autonomy === 'supervised') patch.autonomy = body.autonomy;
     if (typeof body.maxAgentSteps === 'number') patch.maxAgentSteps = body.maxAgentSteps;
+    if (typeof body.selfHeal === 'boolean') patch.selfHeal = body.selfHeal;
     if (typeof body.allowCommands === 'boolean') patch.allowCommands = body.allowCommands;
     if (typeof body.maxTokens === 'number') patch.maxTokens = body.maxTokens;
     const updated = await service.updateConfig(patch);
@@ -558,6 +559,10 @@ function registerRoutes(): void {
         files: strArray(body.files),
         specId: typeof body.specId === 'string' ? body.specId : undefined,
         taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
+        autonomy: body.autonomy === 'supervised' ? 'supervised' : body.autonomy === 'autopilot' ? 'autopilot' : undefined,
+        maxSteps: typeof body.maxSteps === 'number' ? body.maxSteps : undefined,
+        resumeSteps: typeof body.resumeSteps === 'number' ? body.resumeSteps : undefined,
+        selfHeal: typeof body.selfHeal === 'boolean' ? body.selfHeal : undefined,
         signal: controller.signal,
         onEvent: (event) => sse.send(event.type, event),
       });

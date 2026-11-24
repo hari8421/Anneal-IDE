@@ -31,6 +31,8 @@ export interface AnnealConfig {
   maxAgentSteps: number;
   /** How many times a failing tool call may be repaired inside one step. */
   maxToolRepairs: number;
+  /** Enable transport retries, context shrinking, tool repair and tool-call rescue. */
+  selfHeal: boolean;
   /** LLM transport attempts (1 = no retry). */
   maxAttempts: number;
   requestTimeoutMs: number;
@@ -52,6 +54,7 @@ export const DEFAULT_CONFIG: Omit<AnnealConfig, 'workspaceRoot'> = {
   reserveOutputTokens: 2048,
   maxAgentSteps: 24,
   maxToolRepairs: 3,
+  selfHeal: true,
   maxAttempts: 4,
   requestTimeoutMs: 120_000,
   autonomy: 'autopilot',
@@ -158,6 +161,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AnnealConfig {
     ),
     maxAgentSteps: Math.max(1, num(env.ANNEAL_MAX_STEPS ?? file.maxAgentSteps, DEFAULT_CONFIG.maxAgentSteps)),
     maxToolRepairs: Math.max(0, num(file.maxToolRepairs, DEFAULT_CONFIG.maxToolRepairs)),
+    selfHeal: bool(env.ANNEAL_SELF_HEAL ?? file.selfHeal, DEFAULT_CONFIG.selfHeal),
     maxAttempts: Math.max(1, num(env.ANNEAL_MAX_ATTEMPTS ?? file.maxAttempts, DEFAULT_CONFIG.maxAttempts)),
     requestTimeoutMs: Math.max(
       1000,

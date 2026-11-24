@@ -20,6 +20,7 @@ interface EditorPaneProps {
   onChange: (path: string, content: string) => void;
   onSave: () => void;
   onToggleBreakpoint: (path: string, line: number) => void;
+  onAttachFile: (path: string) => void;
   onInlineEdit: () => void;
   onQuickOpen: () => void;
   onCursorChange?: (position: { line: number; column: number }) => void;
@@ -49,6 +50,7 @@ export default function EditorPane({
   onChange,
   onSave,
   onToggleBreakpoint,
+  onAttachFile,
   onInlineEdit,
   onQuickOpen,
   onCursorChange,
@@ -146,6 +148,15 @@ export default function EditorPane({
         <div className="ui-editor-tab-actions">
           {active && (
             <>
+              <button
+                type="button"
+                className="ui-icon-button"
+                title={`Attach ${active.path} to chat`}
+                aria-label="Attach active file to chat"
+                onClick={() => onAttachFile(active.path)}
+              >
+                <Icon name="paperclip" size={14} />
+              </button>
               <button type="button" className="ui-icon-button" title="Inline edit selection (Ctrl/Cmd+K)" onClick={onInlineEdit}>
                 <Icon name="sparkles" size={14} />
               </button>

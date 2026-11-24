@@ -106,6 +106,8 @@ overflow, cancellation and resume paths.
 - [x] Append-only JSONL journal with per-entry `fsync`
 - [x] Torn-write tolerance on load
 - [x] Resume that skips completed steps and replays tool results without re-executing them
+- [x] Resume after step-budget exhaustion gets a fresh budget; Self heal adds a repair directive
+- [x] Self-healing on/off control in Settings, composer and command palette
 - [x] Checkpoint before every mutating tool call
 - [x] Checkpoint diff + restore (including removal of files added after the snapshot)
 - [x] Checkpoint pruning
@@ -119,7 +121,7 @@ overflow, cancellation and resume paths.
 - [x] Head/tail truncation with explicit marker
 - [x] Lexical workspace retrieval to seed context
 
-### Kiro workflow
+### Spec-driven workflow
 - [x] `requirements.md` generation (user stories + EARS criteria with R-IDs)
 - [x] `design.md` generation (architecture, interfaces, data models, error handling, traceability)
 - [x] `tasks.md` generation (hierarchical checkboxes, one repair pass)

@@ -8,6 +8,7 @@ interface FileTreeProps {
   selected: string[];
   onOpen: (path: string) => void;
   onToggleSelect: (path: string) => void;
+  onAttachFile: (path: string) => void;
   onRename: (path: string, name: string) => void;
   onDelete: (path: string) => void;
 }
@@ -47,6 +48,7 @@ function TreeNode({
   selected,
   onOpen,
   onToggleSelect,
+  onAttachFile,
   onRename,
   onDelete,
   renaming,
@@ -80,7 +82,7 @@ function TreeNode({
           <button
             type="button"
             className={`ui-check${isSelected ? ' checked' : ''}`}
-            title="Include in agent context"
+            title="Attach to chat context"
             aria-label={`Toggle context for ${node.path}`}
             onClick={(event) => { event.stopPropagation(); onToggleSelect(node.path); }}
           >
@@ -107,6 +109,14 @@ function TreeNode({
         )}
         {!isRenaming && !isDir && (
           <span className="ui-tree-actions">
+            <button
+              type="button"
+              title="Attach to chat"
+              aria-label={`Attach ${node.path} to chat`}
+              onClick={(event) => { event.stopPropagation(); onAttachFile(node.path); }}
+            >
+              <Icon name="paperclip" size={11} />
+            </button>
             <button type="button" title="Rename" aria-label={`Rename ${node.path}`} onClick={(event) => { event.stopPropagation(); setDraft(node.name); setRenaming(node.path); }}>
               <Icon name="edit" size={11} />
             </button>
@@ -126,6 +136,7 @@ function TreeNode({
             selected,
             onOpen,
             onToggleSelect,
+            onAttachFile,
             onRename,
             onDelete,
             renaming,
@@ -137,7 +148,7 @@ function TreeNode({
   );
 }
 
-export default function FileTree({ nodes, activePath, selected, onOpen, onToggleSelect, onRename, onDelete }: FileTreeProps) {
+export default function FileTree({ nodes, activePath, selected, onOpen, onToggleSelect, onAttachFile, onRename, onDelete }: FileTreeProps) {
   const [filter, setFilter] = useState('');
   const [renaming, setRenaming] = useState<string | null>(null);
   const visible = useMemo(() => filterNodes(nodes, filter), [nodes, filter]);
@@ -160,6 +171,7 @@ export default function FileTree({ nodes, activePath, selected, onOpen, onToggle
             selected={selected}
             onOpen={onOpen}
             onToggleSelect={onToggleSelect}
+            onAttachFile={onAttachFile}
             onRename={onRename}
             onDelete={onDelete}
             renaming={renaming}

@@ -65,6 +65,28 @@ function flattenFiles(nodes: FileNode[], into: string[] = []): string[] {
   return into;
 }
 
+/** Read attached files once and render them as a prompt block shared by Ask and Spec. */
+async function attachmentPrompt(files: string[]): Promise<string> {
+  const sections: string[] = [];
+  let used = 0;
+  for (const file of [...new Set(files)]) {
+    const remaining = 120_000 - used;
+    if (remaining <= 0) break;
+    try {
+      const { content } = await api.readFile(file);
+      const limit = Math.min(48_000, remaining);
+      const snippet = content.length > limit ? `${content.slice(0, limit)}\n… [truncated]` : content;
+      sections.push(`<workspace-file path=${JSON.stringify(file)}>\n${snippet}\n</workspace-file>`);
+      used += snippet.length;
+    } catch (err) {
+      sections.push(
+        `<workspace-file path=${JSON.stringify(file)} error=${JSON.stringify((err as Error).message)} />`,
+      );
+    }
+  }
+  return sections.length ? `Workspace files:\n${sections.join('\n\n')}` : '';
+}
+
 function ResizeHandle({ axis, onDrag }: { axis: 'x' | 'y'; onDrag: (delta: number) => void }) {
   return (
     <div
@@ -336,20 +358,29 @@ export default function App() {
   }, [updateChat]);
 
   const listen = useCallback(
-    async (url: string, body: unknown, label: string) => {
+    async (url: string, body: unknown, label: string, options?: { resumeOf?: string }) => {
       abortRef.current?.abort();
       const id = ensureChat('agent');
       const controller = new AbortController();
       abortRef.current = controller;
+      const existing = chatsRef.current.find((chat) => chat.id === id);
+      const continueTranscript = Boolean(
+        options?.resumeOf &&
+          existing &&
+          existing.session.runId === options.resumeOf &&
+          existing.session.entries.length > 0,
+      );
       updateChat(id, (chat) => ({
         ...chat,
         title: chatTitle(label),
         updatedAt: Date.now(),
-        session: {
-          ...emptySession(),
-          streaming: true,
-          entries: [{ id: Date.now(), kind: 'user', text: label }],
-        },
+        session: continueTranscript
+          ? { ...chat.session, streaming: true, error: null, result: null }
+          : {
+              ...emptySession(),
+              streaming: true,
+              entries: [{ id: Date.now(), kind: 'user', text: label }],
+            },
       }));
       setChatMode('agent');
       setRunSummary(null);
@@ -376,18 +407,36 @@ export default function App() {
     return activePath ? [activePath] : [];
   }, [activePath, selected]);
 
+  const attachFiles = useCallback((paths: string[]) => {
+    setSelected((prev) => [...new Set([...prev, ...paths])]);
+  }, []);
+
   const runGoal = useCallback(
-    (goal: string) => {
-      void listen('/api/run', { goal, files: contextFiles(), autonomy }, goal);
+    (goal: string, files: string[] = contextFiles()) => {
+      void listen('/api/run', { goal, files, autonomy }, goal);
     },
     [autonomy, contextFiles, listen],
   );
 
   const resumeRun = useCallback(
-    (runId: string) => {
-      void listen(`/api/runs/${encodeURIComponent(runId)}/resume`, { files: contextFiles(), autonomy }, `Resume run ${runId}`);
+    (runId: string, options: { selfHeal?: boolean } = {}) => {
+      // Each resume extends the ceiling by another full budget, so a run that
+      // paused at step N actually gets steps N..N+maxSteps to finish.
+      const budget = Math.max(1, health?.config.maxSteps ?? 24);
+      const label = options.selfHeal ? `Self-heal run ${runId}` : `Resume run ${runId}`;
+      void listen(
+        `/api/runs/${encodeURIComponent(runId)}/resume`,
+        {
+          files: contextFiles(),
+          autonomy,
+          resumeSteps: budget,
+          ...(options.selfHeal ? { selfHeal: true } : {}),
+        },
+        label,
+        { resumeOf: runId },
+      );
     },
-    [autonomy, contextFiles, listen],
+    [autonomy, contextFiles, health?.config.maxSteps, listen],
   );
 
   const cancelRun = useCallback(() => {
@@ -410,7 +459,7 @@ export default function App() {
   );
 
   const askGoal = useCallback(
-    (text: string) => {
+    async (text: string, files: string[]) => {
       const id = ensureChat('ask');
       const prior = chatsRef.current.find((chat) => chat.id === id)?.askMessages ?? [];
       const controller = new AbortController();
@@ -423,9 +472,20 @@ export default function App() {
         updatedAt: Date.now(),
         askMessages: [...chat.askMessages, { role: 'user', text }, { role: 'assistant', text: '' }],
       }));
+
+      // Ask has no tool loop, so attached files must be read here and sent with the prompt.
+      const attachments = await attachmentPrompt(files);
+      const prompt = attachments ? `${text}\n\n${attachments}` : text;
+      updateChat(id, (chat) => ({
+        ...chat,
+        askMessages: chat.askMessages.map((message, index) =>
+          index === chat.askMessages.length - 2 ? { ...message, content: prompt } : message,
+        ),
+      }));
+
       const messages = [
-        ...prior.map((message) => ({ role: message.role, content: message.text })),
-        { role: 'user' as const, content: text },
+        ...prior.map((message) => ({ role: message.role, content: message.content ?? message.text })),
+        { role: 'user' as const, content: prompt },
       ];
       let answer = '';
       void api.chatStream(messages, (chunk) => {
@@ -448,14 +508,15 @@ export default function App() {
   );
 
   const specGoal = useCallback(
-    async (text: string) => {
+    async (text: string, files: string[] = []) => {
       ensureChat('spec');
       const words = text.replace(/^(build|add|create|implement|make)\s+/i, '').split(/[,.;\n]/)[0]?.trim() || text;
       const name = words.slice(0, 60);
       try {
         const { spec } = await api.createSpec(name);
+        const attachments = await attachmentPrompt(files);
         setSpecFocusId(spec.id);
-        setSpecAutoRequest(text);
+        setSpecAutoRequest(attachments ? `${text}\n\n${attachments}` : text);
         setActivity('specs');
         setSidebarOpen(true);
       } catch (err) {
@@ -537,6 +598,18 @@ export default function App() {
     setAutonomy(next);
     void api.updateConfig({ autonomy: next }).catch(() => undefined);
   }, []);
+
+  const changeSelfHeal = useCallback(
+    async (enabled: boolean) => {
+      try {
+        await api.updateConfig({ selfHeal: enabled });
+        await refreshHealth();
+      } catch (err) {
+        setError((err as Error).message);
+      }
+    },
+    [refreshHealth],
+  );
 
   const acceptInlineEdit = useCallback(
     (patched: string) => {
@@ -626,12 +699,13 @@ export default function App() {
       { id: 'new-chat', title: 'New conversation', category: 'Agent', icon: 'plus', run: () => { setChatOpen(true); const created = newChat(chatMode); setChats((prev) => [created, ...prev].slice(0, 40)); setActiveChatId(created.id); } },
       { id: 'autonomy-autopilot', title: 'Set autonomy: autopilot', category: 'Agent', icon: 'zap', run: () => changeAutonomy('autopilot') },
       { id: 'autonomy-supervised', title: 'Set autonomy: supervised', category: 'Agent', icon: 'shield', run: () => changeAutonomy('supervised') },
+      { id: 'self-heal', title: `Self-healing: ${health?.config.selfHeal === false ? 'off — turn on' : 'on — turn off'}`, category: 'Agent', icon: 'shield', run: () => void changeSelfHeal(!health?.config.selfHeal) },
       { id: 'stop', title: 'Stop running agent', category: 'Agent', icon: 'stop', run: cancelRun },
       ...(['files', 'search', 'specs', 'steering', 'hooks', 'runs', 'checkpoints', 'models', 'mcp', 'debug', 'settings'] as ActivityKey[]).map((key) => ({
         id: `view-${key}`, title: `View: ${PANEL_TITLES[key].title}`, category: 'Panels', icon: PANEL_TITLES[key].icon, run: () => show(key),
       })),
     ];
-  }, [activePath, cancelRun, changeAutonomy, changeMode, chatMode, closeFile, saveActive, triggerInlineEdit]);
+  }, [activePath, cancelRun, changeAutonomy, changeMode, changeSelfHeal, chatMode, closeFile, health?.config.selfHeal, saveActive, triggerInlineEdit]);
 
   const workspaceFiles = useMemo(() => flattenFiles(tree), [tree]);
   const dirtyPaths = openFiles.filter((file) => file.content !== file.saved).map((file) => file.path);
@@ -758,6 +832,7 @@ export default function App() {
                       selected={selected}
                       onOpen={(path) => void openFile(path)}
                       onToggleSelect={(path) => setSelected((prev) => prev.includes(path) ? prev.filter((entry) => entry !== path) : [...prev, path])}
+                      onAttachFile={(path) => attachFiles([path])}
                       onRename={(path, name) => void renameFile(path, name)}
                       onDelete={(path) => void deleteFile(path)}
                     />
@@ -785,7 +860,8 @@ export default function App() {
                 {activity === 'runs' && (
                   <RunsTab
                     runs={runs}
-                    onResume={resumeRun}
+                    onResume={(id) => resumeRun(id)}
+                    onSelfHeal={(id) => resumeRun(id, { selfHeal: true })}
                     onCancel={(id) => { void api.cancelRun(id).catch(() => undefined); void refreshRuns(); }}
                     onRefresh={() => void refreshRuns()}
                   />
@@ -811,6 +887,7 @@ export default function App() {
             breakpoints={breakpoints}
             reveal={reveal}
             onToggleBreakpoint={toggleBreakpoint}
+            onAttachFile={(path) => attachFiles([path])}
             onSelect={setActivePath}
             onClose={closeFile}
             onChange={(path, content) => setOpenFiles((prev) => prev.map((file) => file.path === path ? { ...file, content } : file))}
@@ -870,9 +947,14 @@ export default function App() {
               runSummary={runSummary?.text ?? null}
               onRunGoal={runGoal}
               onAsk={askGoal}
-              onSpec={(text) => void specGoal(text)}
+              onSpec={(text, files) => void specGoal(text, files)}
               onCancel={cancelRun}
               onResume={() => session.runId && resumeRun(session.runId)}
+              onSelfHeal={() => session.runId && resumeRun(session.runId, { selfHeal: true })}
+              selfHeal={health?.config.selfHeal ?? true}
+              onSelfHealChange={(enabled) => void changeSelfHeal(enabled)}
+              onAttachFile={(path) => attachFiles([path])}
+              onAttachFiles={attachFiles}
               onOpenFile={(path) => void openFile(path)}
               onClose={() => setChatOpen(false)}
               submitRef={submitRef}

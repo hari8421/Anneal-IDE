@@ -42,6 +42,12 @@ export interface AgentRunOptions {
   reserveOutputTokens?: number;
   maxSteps: number;
   maxToolRepairs: number;
+  /** Extra steps granted when continuing an existing run (defaults to one full budget). */
+  resumeSteps?: number;
+  /** Enable retries, context shrinking, tool repair and tool-call rescue. */
+  selfHeal?: boolean;
+  /** Add an explicit repair instruction when a paused run is self-healed. */
+  selfHealDirective?: boolean;
   autonomy: 'autopilot' | 'supervised';
   allowCommands: boolean;
   commandTimeoutMs: number;
@@ -156,6 +162,11 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
   let consecutiveFailures = 0;
   const completed = new Set(journal.completedSteps());
   const startStep = completed.size ? Math.max(...completed) + 1 : 0;
+  // A resume must get *more* room to work; otherwise it re-enters the loop at
+  // the exact step ceiling that paused it and immediately pauses again.
+  const resumeSteps = Math.max(1, options.resumeSteps ?? options.maxSteps);
+  const stepLimit = isResume ? Math.max(options.maxSteps, startStep + resumeSteps) : options.maxSteps;
+  const maxRepairs = options.selfHeal === false ? 0 : options.maxToolRepairs;
 
   const finish = async (
     status: AgentStatus,
@@ -176,13 +187,13 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
     };
   };
 
-  if (startStep >= options.maxSteps) {
-    return finish('paused', `Step budget of ${options.maxSteps} exhausted before the goal completed.`, {
+  if (startStep >= stepLimit) {
+    return finish('paused', `Step budget of ${stepLimit} exhausted before the goal completed.`, {
       resumable: true,
     });
   }
 
-  for (let step = startStep; step < options.maxSteps; step += 1) {
+  for (let step = startStep; step < stepLimit; step += 1) {
     if (options.signal?.aborted) {
       return finish('cancelled', 'Run cancelled by the user. It can be resumed.', { resumable: true });
     }
@@ -191,14 +202,20 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
     const stepKey = `step:${step}`;
     if (journal.hasKey(`${stepKey}:done`)) continue;
 
-    emit('step.start', step, { total: options.maxSteps });
+    emit('step.start', step, { total: stepLimit });
 
     // --- Build the prompt for this step -------------------------------------
     const guidance: Turn[] = [];
-    if (step === startStep && turns.length <= 1) {
-      guidance.push({ role: 'user', content: goalDirective(options.goal, step, options.maxSteps) });
+    if (step === startStep && options.selfHealDirective) {
+      guidance.push({
+        role: 'user',
+        content:
+          'Self-heal: the previous run stopped before the goal was complete. Review the errors and tool results above, fix the root cause instead of repeating the same failing action, and continue toward the goal.',
+      });
+    } else if (step === startStep && turns.length <= 1) {
+      guidance.push({ role: 'user', content: goalDirective(options.goal, step, stepLimit) });
     } else {
-      guidance.push({ role: 'user', content: stepNudge(step, options.maxSteps) });
+      guidance.push({ role: 'user', content: stepNudge(step, stepLimit) });
     }
     const history = [...turns, ...guidance].map((turn) => ({ role: turn.role, content: turn.content }));
     const built = buildContext({
@@ -240,6 +257,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
         onRetryShrink: () => {
           budget = Math.max(1024, Math.floor(budget * 0.6));
         },
+        enabled: options.selfHeal !== false,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -274,7 +292,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
           role: 'user',
           content: 'Your previous response was empty. Continue the task with a tool call, or reply "DONE:" if it is complete.',
         });
-        if (consecutiveFailures > options.maxToolRepairs) {
+        if (consecutiveFailures > maxRepairs) {
           return finish('failed', message, { error: message, resumable: true });
         }
         continue;
@@ -382,7 +400,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
       consecutiveFailures = 0;
     } else {
       consecutiveFailures += 1;
-      if (consecutiveFailures > options.maxToolRepairs) {
+      if (consecutiveFailures > maxRepairs) {
         const message = `Stopped after ${consecutiveFailures} consecutive failed steps. The last errors are in the run journal; resume after fixing the cause or roll back to a checkpoint.`;
         await journal.append('error', { step, data: { message } });
         return finish('failed', message, { error: message, resumable: true });
@@ -392,7 +410,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
 
   return finish(
     'paused',
-    `Reached the step budget of ${options.maxSteps} with the goal still open. Resume to continue from where it stopped.`,
+    `Reached the step budget of ${stepLimit} with the goal still open. Resume to continue from where it stopped.`,
     { resumable: true },
   );
 }
@@ -406,6 +424,7 @@ interface HealingRequest {
   onHeal: (info: { kind: string; detail: string; attempt: number }) => void;
   onRetryShrink: () => void;
   getBudget: () => number;
+  enabled: boolean;
 }
 
 /**
@@ -456,7 +475,7 @@ async function requestWithHealing(request: HealingRequest): Promise<ChatResult> 
 
       // Local models sometimes emit tool calls as fenced JSON instead of using
       // the tool-call channel. Recover those before asking for another step.
-      if (!response.toolCalls.length && response.finishReason === 'stop') {
+      if (request.enabled && !response.toolCalls.length && response.finishReason === 'stop') {
         const rescued = rescueToolCall(response.content);
         if (rescued) {
           request.onHeal({ kind: 'tool-call-rescue', detail: 'Recovered a tool call emitted as JSON text.', attempt });
@@ -465,7 +484,8 @@ async function requestWithHealing(request: HealingRequest): Promise<ChatResult> 
       }
       return response;
     } catch (error) {
-      const canShrink = isContextOverflow(error) && attempt <= 3 && request.getBudget() > 1500;
+      const canShrink =
+        request.enabled && isContextOverflow(error) && attempt <= 3 && request.getBudget() > 1500;
       if (canShrink) {
         messages = shrinkPrompt(messages, 0.4);
         request.onHeal({

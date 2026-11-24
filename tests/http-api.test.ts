@@ -63,6 +63,31 @@ describe('HTTP API', () => {
     expect(body.config.workspaceRoot).toBe(workspace);
   });
 
+  it('persists the self-heal setting through the config API', async () => {
+    const update = await fetch(`${baseUrl}/api/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ selfHeal: false }),
+    });
+    expect(update.status).toBe(200);
+    expect((await update.json() as { config: { selfHeal: boolean } }).config.selfHeal).toBe(false);
+
+    const health = (await (await fetch(`${baseUrl}/api/health`)).json()) as { config: { selfHeal: boolean } };
+    expect(health.config.selfHeal).toBe(false);
+
+    const persisted = JSON.parse(await fs.readFile(path.join(workspace, '.anneal/config.json'), 'utf8')) as {
+      selfHeal: boolean;
+    };
+    expect(persisted.selfHeal).toBe(false);
+
+    const restore = await fetch(`${baseUrl}/api/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ selfHeal: true }),
+    });
+    expect(restore.status).toBe(200);
+  });
+
   it('lists, reads, writes and deletes workspace files', async () => {
     const tree = (await (await fetch(`${baseUrl}/api/files`)).json()) as { tree: Array<{ name: string }> };
     expect(tree.tree.some((node) => node.name === 'src')).toBe(true);

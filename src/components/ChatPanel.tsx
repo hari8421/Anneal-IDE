@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import AttachmentPicker from './AttachmentPicker';
 import type { Autonomy, Health } from '../lib/api';
 import type { AskMessage, ChatMode, ChatRecord } from '../lib/chat';
 import type { LogEntry, SessionState } from '../lib/session';
@@ -23,11 +24,16 @@ interface ChatPanelProps {
   onRemoveFile: (path: string) => void;
   workspaceFiles: string[];
   runSummary: string | null;
-  onRunGoal: (goal: string) => void;
-  onAsk: (goal: string) => void;
-  onSpec: (goal: string) => void;
+  onRunGoal: (goal: string, files: string[]) => void;
+  onAsk: (goal: string, files: string[]) => void;
+  onSpec: (goal: string, files: string[]) => void;
   onCancel: () => void;
   onResume: () => void;
+  onSelfHeal: () => void;
+  selfHeal: boolean;
+  onSelfHealChange: (enabled: boolean) => void;
+  onAttachFile: (path: string) => void;
+  onAttachFiles: (paths: string[]) => void;
   onOpenFile: (path: string) => void;
   onClose: () => void;
   submitRef: MutableRefObject<(() => void) | null>;
@@ -137,6 +143,11 @@ export default function ChatPanel({
   onSpec,
   onCancel,
   onResume,
+  onSelfHeal,
+  selfHeal,
+  onSelfHealChange,
+  onAttachFile,
+  onAttachFiles,
   onOpenFile,
   onClose,
   submitRef,
@@ -145,6 +156,7 @@ export default function ChatPanel({
   const [goal, setGoal] = useState('');
   const [historyAt, setHistoryAt] = useState(-1);
   const [showHistory, setShowHistory] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const offline = Boolean(health && !health.lmStudio.ok);
@@ -172,18 +184,31 @@ export default function ChatPanel({
       .map((entry) => entry.path);
   }, [mention, workspaceFiles]);
 
-  const insertFile = (path: string) => {
-    if (!mention) return;
-    setGoal(`${goal.slice(0, mention.start)}@${path} `);
+  const mentionedFiles = useMemo(() => {
+    const paths: string[] = [];
+    const pattern = /(?:^|\s)@([^\s,;]+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(goal)) !== null) {
+      if (!paths.includes(match[1] ?? '')) paths.push(match[1] ?? '');
+    }
+    return paths.filter(Boolean);
+  }, [goal]);
+
+  const attachFile = (path: string) => {
+    onAttachFile(path);
+    if (mention) setGoal(`${goal.slice(0, mention.start)}@${path} `);
+    else setGoal((current) => `${current}${current && !current.endsWith(' ') ? ' ' : ''}@${path} `);
     textareaRef.current?.focus();
   };
 
   const submit = () => {
     const text = goal.trim();
-    if (!text || busy || offline) return;
-    if (mode === 'ask') onAsk(text);
-    else if (mode === 'spec') onSpec(text);
-    else onRunGoal(text);
+    if (!text || busy) return;
+    const files = [...new Set([...selectedFiles, ...mentionedFiles])];
+    for (const path of mentionedFiles) onAttachFile(path);
+    if (mode === 'ask') onAsk(text, files);
+    else if (mode === 'spec') onSpec(text, files);
+    else onRunGoal(text, files);
     setGoal('');
     setHistoryAt(-1);
   };
@@ -290,7 +315,7 @@ export default function ChatPanel({
           <div className="ui-chat-welcome">
             <div className="ui-welcome-orb"><Icon name="lightbulb" size={22} /></div>
             <h3>Ask anything about your project</h3>
-            <p>Answers stream from your model. Attach files with <kbd className="ui-kbd">@</kbd> to include their contents — Ask never edits files.</p>
+            <p>Answers stream from your model. Click <strong>Attach</strong> or type <kbd className="ui-kbd">@</kbd> to include workspace files — Ask never edits files.</p>
           </div>
         )}
         {mode === 'agent' && session.entries.length === 0 && (
@@ -366,7 +391,7 @@ export default function ChatPanel({
           <div className="ui-mention-menu">
             <div className="ui-menu-head">Attach a file</div>
             {suggestions.map((path) => (
-              <button key={path} type="button" onClick={() => insertFile(path)}>
+              <button key={path} type="button" onClick={() => attachFile(path)}>
                 <Icon name="file" size={13} /> <span>{path}</span>
               </button>
             ))}
@@ -398,10 +423,28 @@ export default function ChatPanel({
           }}
         />
         <div className="ui-composer-actions">
+          <button
+            type="button"
+            className="ui-btn ghost small"
+            title="Browse and attach workspace files"
+            onClick={() => setPickerOpen(true)}
+          >
+            <Icon name="paperclip" size={12} /> Attach
+          </button>
           <span className="ui-composer-hint">
-            <Icon name="paperclip" size={12} /> {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} attached
+            {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} attached
           </span>
           <span className="ui-grow" />
+          <button
+            type="button"
+            className="ui-btn ghost small"
+            aria-pressed={selfHeal}
+            disabled={busy}
+            title={`Self-healing is ${selfHeal ? 'on' : 'off'} — retries, context shrinking and tool repair`}
+            onClick={() => onSelfHealChange(!selfHeal)}
+          >
+            <Icon name="shield" size={12} /> Self-heal
+          </button>
           {busy ? (
             <button type="button" className="ui-btn danger small" onClick={onCancel}>
               <Icon name="stop" size={12} /> Stop
@@ -409,9 +452,14 @@ export default function ChatPanel({
           ) : (
             <>
               {mode === 'agent' && session.result?.resumable && session.runId && (
-                <button type="button" className="ui-btn ghost small" onClick={onResume}>
-                  <Icon name="history" size={13} /> Resume
-                </button>
+                <>
+                  <button type="button" className="ui-btn ghost small" onClick={onResume}>
+                    <Icon name="history" size={13} /> Resume
+                  </button>
+                  <button type="button" className="ui-btn ghost small" onClick={onSelfHeal} title="Resume with a repair directive and a fresh step budget">
+                    <Icon name="shield" size={12} /> Self heal
+                  </button>
+                </>
               )}
               <button type="button" className="ui-btn primary small" disabled={!goal.trim()} onClick={submit}>
                 <Icon name={mode === 'agent' ? 'zap' : mode === 'spec' ? 'specs' : 'send'} size={13} />
@@ -426,6 +474,18 @@ export default function ChatPanel({
           <span className="ui-muted">{health?.config.model ?? 'no model'}</span>
         </div>
       </div>
+      {pickerOpen && (
+        <AttachmentPicker
+          files={workspaceFiles}
+          selected={selectedFiles}
+          onConfirm={(paths) => {
+            onAttachFiles(paths);
+            setPickerOpen(false);
+            textareaRef.current?.focus();
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       {activeChat && <div className="ui-chat-id" title={activeChat.id}>{activeChat.title}</div>}
     </section>
   );

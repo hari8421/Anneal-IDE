@@ -370,11 +370,13 @@ export function CheckpointsTab({ onRestored }: { onRestored: () => void }) {
 export function RunsTab({
   runs,
   onResume,
+  onSelfHeal,
   onCancel,
   onRefresh,
 }: {
   runs: RunSummary[];
   onResume: (id: string) => void;
+  onSelfHeal: (id: string) => void;
   onCancel: (id: string) => void;
   onRefresh: () => void;
 }) {
@@ -397,10 +399,17 @@ export function RunsTab({
                 <button className="btn danger tiny" onClick={() => onCancel(run.id)}>
                   Stop
                 </button>
+              ) : run.status === 'completed' ? (
+                <span className="muted tiny">done</span>
               ) : (
-                <button className="btn ghost tiny" onClick={() => onResume(run.id)}>
-                  Resume
-                </button>
+                <>
+                  <button className="btn ghost tiny" onClick={() => onResume(run.id)}>
+                    Resume
+                  </button>
+                  <button className="btn ghost tiny" title="Resume with a repair directive" onClick={() => onSelfHeal(run.id)}>
+                    Self heal
+                  </button>
+                </>
               )}
             </div>
             {run.error && <div className="notice error small">{run.error}</div>}

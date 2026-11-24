@@ -57,7 +57,7 @@ function ensureTitle(markdown: string, title: string): string {
 }
 
 /**
- * Kiro-style three-stage spec workflow: requirements -> design -> tasks.
+ * Three-stage spec workflow: requirements -> design -> tasks.
  * Each stage is streamed to the caller and persisted immediately, so a failure
  * in a later stage leaves the earlier approved documents intact.
  */

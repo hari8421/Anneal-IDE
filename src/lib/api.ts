@@ -47,6 +47,8 @@ export interface Health {
     contextBudgetTokens: number;
     autonomy: Autonomy;
     maxSteps: number;
+    maxToolRepairs: number;
+    selfHeal: boolean;
     allowCommands: boolean;
   };
   memory: { facts: number; events: number; coreBytes: number };

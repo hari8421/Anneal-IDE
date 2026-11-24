@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Local-first, Kiro-style spec-driven agentic IDE backed by LM Studio",
+  "description": "Local-first, spec-driven agentic IDE backed by LM Studio",
   "engines": {
     "node": ">=20"
   },

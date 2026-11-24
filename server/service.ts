@@ -24,6 +24,10 @@ export interface RunRequest {
   taskId?: string;
   autonomy?: Autonomy;
   maxSteps?: number;
+  /** Additional steps granted to a resumed run. */
+  resumeSteps?: number;
+  /** Per-run override of the workspace self-heal setting. */
+  selfHeal?: boolean;
   onEvent?: (event: AgentEvent) => void;
   signal?: AbortSignal;
   trigger?: 'user' | 'hook';
@@ -74,7 +78,7 @@ export class AnnealService {
       temperature: this.config.temperature,
       maxTokens: this.config.maxTokens,
       timeoutMs: this.config.requestTimeoutMs,
-      maxAttempts: this.config.maxAttempts,
+      maxAttempts: this.config.selfHeal ? this.config.maxAttempts : 1,
     });
   }
 
@@ -121,6 +125,8 @@ export class AnnealService {
       contextBudgetTokens: next.contextBudgetTokens,
       reserveOutputTokens: next.reserveOutputTokens,
       maxAgentSteps: next.maxAgentSteps,
+      maxToolRepairs: next.maxToolRepairs,
+      selfHeal: next.selfHeal,
       autonomy: next.autonomy,
       allowCommands: next.allowCommands,
     };
@@ -154,6 +160,8 @@ export class AnnealService {
         contextBudgetTokens: this.config.contextBudgetTokens,
         autonomy: this.config.autonomy,
         maxSteps: this.config.maxAgentSteps,
+        maxToolRepairs: this.config.maxToolRepairs,
+        selfHeal: this.config.selfHeal,
         allowCommands: this.config.allowCommands,
       },
       memory: await this.memorySummary(),
@@ -345,6 +353,9 @@ export class AnnealService {
         reserveOutputTokens: this.config.reserveOutputTokens,
         maxSteps: request.maxSteps ?? this.config.maxAgentSteps,
         maxToolRepairs: this.config.maxToolRepairs,
+        resumeSteps: request.resumeSteps,
+        selfHeal: request.selfHeal ?? this.config.selfHeal,
+        selfHealDirective: request.selfHeal === true,
         autonomy,
         allowCommands: this.config.allowCommands,
         commandTimeoutMs: this.config.commandTimeoutMs,

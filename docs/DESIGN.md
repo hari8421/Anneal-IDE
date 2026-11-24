@@ -7,9 +7,8 @@ Last updated: 2026-10-30.
 
 ## 1. Problem and goals
 
-Kiro (AWS) showed that an agent is only useful when the work is *specified before it is
-generated* and when the agent can survive its own failures. `anneal` rebuilds that workflow for
-people who run models locally.
+An agent is only useful when the work is *specified before it is generated* and when the agent can
+survive its own failures. `anneal` provides that workflow for people who run models locally.
 
 ### Goals
 
@@ -180,7 +179,7 @@ Assembly order:
 `resolveInWorkspace` rejects `..`, absolute paths outside the root, NUL bytes and symlink escapes
 (realpath of the closest existing ancestor), so a model cannot read or write outside the project.
 
-### 3.7 `spec/` — the Kiro workflow
+### 3.7 `spec/` — the spec workflow
 
 Generation is three sequential streaming completions with separate system prompts:
 
@@ -350,7 +349,8 @@ keystroke into a 200 MB download; other languages keep editing without navigatio
 | Patch does not match | `PatchError` | error turn with file-state advice | none (nothing written) |
 | Write tool throws | exception | error turn, run continues | possible partial file → checkpoint restore |
 | Process crash | missing `run.end` | resume from journal, skip finished keys | tool results replayed from journal |
-| Repeated step failure | `consecutiveFailures > maxToolRepairs` | fail fast, keep journal, expose Resume | n/a |
+| Step budget exhausted | `paused` with all steps journaled | resume gets `startStep + resumeSteps` as its new ceiling | a fresh budget on every resume |
+| Repeated step failure | `consecutiveFailures > maxRepairs` | fail fast, keep journal, expose Resume and Self heal | `selfHeal: false` sets `maxRepairs = 0` |
 
 Deliberate limitation: `anneal` never auto-restores a checkpoint behind your back. Destructive
 rollback is an explicit action in the Undo panel.
@@ -393,9 +393,9 @@ model.
 
 ---
 
-## 7. Kiro parity and gaps
+## 7. Feature parity and gaps
 
-| Kiro feature | Anneal | Notes |
+| Capability | Anneal | Notes |
 | --- | --- | --- |
 | Specs (requirements/design/tasks) | ✅ | Same three artifacts, EARS requirements, R-ID traceability |
 | Task execution from `tasks.md` | ✅ | Checkbox only flips on success |

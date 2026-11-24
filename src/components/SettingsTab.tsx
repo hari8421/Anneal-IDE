@@ -11,6 +11,7 @@ export function SettingsTab({ health, onSaved, onWorkspaceChanged }: SettingsTab
   const [contextBudget, setContextBudget] = useState(health?.config.contextBudgetTokens ?? 8192);
   const [maxSteps, setMaxSteps] = useState(health?.config.maxSteps ?? 24);
   const [allowCommands, setAllowCommands] = useState(health?.config.allowCommands ?? true);
+  const [selfHeal, setSelfHeal] = useState(health?.config.selfHeal ?? true);
   const [workspaceRoot, setWorkspaceRoot] = useState(health?.config.workspaceRoot ?? '');
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,6 +23,7 @@ export function SettingsTab({ health, onSaved, onWorkspaceChanged }: SettingsTab
     setContextBudget(health.config.contextBudgetTokens);
     setMaxSteps(health.config.maxSteps);
     setAllowCommands(health.config.allowCommands);
+    setSelfHeal(health.config.selfHeal);
     setWorkspaceRoot(health.config.workspaceRoot);
   }, [health]);
 
@@ -50,6 +52,7 @@ export function SettingsTab({ health, onSaved, onWorkspaceChanged }: SettingsTab
         contextBudgetTokens: contextBudget,
         maxAgentSteps: maxSteps,
         allowCommands,
+        selfHeal,
       });
       setNotice('Settings saved.');
       await onSaved();
@@ -118,6 +121,25 @@ export function SettingsTab({ health, onSaved, onWorkspaceChanged }: SettingsTab
           onChange={(e) => setMaxSteps(Number(e.target.value))}
         />
         <span className="muted small">steps</span>
+      </div>
+
+      <label className="muted tiny" htmlFor="self-heal">
+        Self-healing — retry transport errors, shrink over-long prompts and repair failed tools
+      </label>
+      <div className="field" style={{ gap: 10 }}>
+        <input
+          id="self-heal"
+          type="checkbox"
+          checked={selfHeal}
+          onChange={(e) => setSelfHeal(e.target.checked)}
+          style={{ width: 'auto', flex: 'none' }}
+        />
+        <span className="muted small">
+          {selfHeal ? 'Enabled — recoverable failures are retried automatically' : 'Disabled — a failed step stops immediately'}
+        </span>
+      </div>
+      <div className="hint tiny">
+        You can also toggle this in the chat composer, or use “Self heal” on a paused run to resume with a repair directive.
       </div>
 
       <label className="muted tiny" htmlFor="allow-cmds">

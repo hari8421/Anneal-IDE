@@ -247,6 +247,68 @@ describe('runAgent', () => {
     expect(result.resumable).toBe(true);
   });
 
+  it('gives a step-budget pause a fresh budget on resume', async () => {
+    const workspaceRoot = await tempDir();
+    const runsDir = await tempDir();
+    const journal = await RunJournal.create(runsDir, 'run-budget-resume');
+    await journal.append('run.start', { data: { goal: 'finish the work' } });
+    await journal.append('step.complete', { step: 0, key: 'step:0:done' });
+    await journal.append('step.complete', { step: 1, key: 'step:1:done' });
+    await journal.append('run.end', { data: { status: 'paused', message: 'budget exhausted' } });
+
+    const client = fakeClient(async () => textResult('DONE: continued after the pause'));
+    const result = await runAgent(
+      baseOptions({
+        client,
+        journal,
+        workspaceRoot,
+        tools: [echoTool],
+        maxSteps: 2,
+        resumeSteps: 2,
+        selfHealDirective: true,
+      }) as never,
+    );
+
+    expect(result.status).toBe('completed');
+    expect(result.steps).toBe(1);
+    expect(client.calls).toHaveLength(1);
+    const prompt = client.calls[0]!.messages.map((message) => message.content).join('\n');
+    expect(prompt).toContain('Self-heal');
+  });
+
+  it('skips prompt shrinking when self-healing is disabled', async () => {
+    const workspaceRoot = await tempDir();
+    const runsDir = await tempDir();
+    const journal = await RunJournal.create(runsDir, 'run-no-heal');
+    const events: AgentEvent[] = [];
+    const client = fakeClient(async () => {
+      throw new LLMError('context length exceeded', { status: 400, retryable: false, kind: 'http' });
+    });
+    const bigSection = {
+      id: 'file:big.ts',
+      kind: 'file' as const,
+      title: 'big.ts',
+      content: 'x '.repeat(2000),
+      priority: 60,
+    };
+
+    const result = await runAgent(
+      baseOptions({
+        client,
+        journal,
+        workspaceRoot,
+        tools: [echoTool],
+        contextSections: [bigSection],
+        selfHeal: false,
+        onEvent: (event: AgentEvent) => events.push(event),
+      }) as never,
+    );
+
+    expect(result.status).toBe('failed');
+    expect(client.calls).toHaveLength(1);
+    expect(events.some((event) => event.type === 'heal')).toBe(false);
+  });
+
   it('rejects unknown tools and invalid JSON arguments without crashing', async () => {
     const workspaceRoot = await tempDir();
     const runsDir = await tempDir();

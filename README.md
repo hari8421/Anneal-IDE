@@ -2,8 +2,8 @@
 
 ![CI](https://github.com/hari8421/genieIDE/actions/workflows/ci.yml/badge.svg)
 
-A local-first, spec-driven agentic IDE in the spirit of Kiro — but every model call goes to
-**your own LM Studio server**. No cloud account, no API keys, no telemetry.
+A local-first, spec-driven agentic IDE where every model call goes to **your own LM Studio
+server**. No cloud account, no API keys, no telemetry.
 
 ```
 requirements.md  →  design.md  →  tasks.md  →  agent executes task-by-task
@@ -11,7 +11,7 @@ requirements.md  →  design.md  →  tasks.md  →  agent executes task-by-task
 
 ## Why it exists
 
-Kiro's value is not the text editor; it is the workflow around the model: a spec that forces
+The value is not the text editor; it is the workflow around the model: a spec that forces
 requirements before code, hooks that automate the boring parts, steering files that keep the
 model aligned with your conventions, checkpoints you can roll back, and an agent loop that
 does not fall over when one run goes wrong. `anneal` implements that workflow against a local
@@ -26,9 +26,10 @@ OpenAI-compatible endpoint.
 | LM Studio models (list, switch, context length) | ✅ | `server/llm/client.ts` |
 | External OpenAI-compatible APIs (optional) | ✅ | `server/config.ts`, `server/llm/client.ts` |
 | Streaming chat + streaming agent events (SSE) | ✅ | `server/llm/client.ts`, `server/index.ts` |
+| Attach workspace files in Ask / Agent / Spec | ✅ | `src/components/AttachmentPicker.tsx`, `src/App.tsx` |
 | Tool use: read, write, patch, list, search, run | ✅ | `server/tools/index.ts` |
 | Resumable runs after a crash or cancel | ✅ | `server/agent/journal.ts`, `server/agent/loop.ts` |
-| Self-healing: retry, backoff, context shrink, repair loop | ✅ | `server/agent/loop.ts`, `server/llm/retry.ts` |
+| Self-healing with an on/off control and “Self heal” resume | ✅ | `server/agent/loop.ts`, `server/llm/retry.ts` |
 | Checkpoints + diff + restore before every write | ✅ | `server/agent/checkpoints.ts` |
 | Agent hooks (file/task/stop events → agent or shell) | ✅ | `server/hooks/hooks.ts` |
 | Steering files (`always` / `auto` / `manual`) | ✅ | `server/steering/steering.ts` |
@@ -267,7 +268,13 @@ tool), which is how conventions survive across runs and restarts.
 ![The Runs tab with journaled runs and a resume action](docs/images/07-runs.png)
 
 Every run is journaled under `.anneal/runs/<id>/journal.jsonl`. **Resume** continues an interrupted
-run from its last completed step instead of replaying the tools it already ran.
+run from its last completed step instead of replaying the tools it already ran. A run that paused at
+its step budget gets a fresh budget on every resume. **Self heal** resumes with a repair directive
+that tells the model to fix the last failure instead of repeating it.
+
+Click the paperclip in the chat composer, an explorer row, or the active editor tab to attach files.
+Attachments are read from the workspace and sent with Ask, Agent and Spec requests; type `@` in the
+composer to filter files by name.
 
 ### Keyboard shortcuts
 
@@ -281,6 +288,12 @@ run from its last completed step instead of replaying the tools it already ran.
 | Ctrl/Cmd+Shift+O | File outline |
 
 ## How the self-healing works
+
+Self-healing is on by default. Turn it off under **Settings → Agent settings** or with the
+**Self-heal** button in the chat composer (also available in the command palette). With it off,
+transport retries, context shrinking, tool-call rescue and repeated tool repair are skipped; a
+failed step stops immediately. `ANNEAL_SELF_HEAL=0` overrides the saved setting for that launch.
+“Self heal” on a paused run enables the repairs for that resume even when the global switch is off.
 
 | Failure | Behaviour |
 | --- | --- |
