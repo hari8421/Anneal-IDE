@@ -12,6 +12,7 @@ interface ChatPanelProps {
   onCancel: () => void;
   onResume: () => void;
   onRemoveFile: (path: string) => void;
+  onRetryHealth: () => void;
 }
 
 export default function ChatPanel({
@@ -24,6 +25,7 @@ export default function ChatPanel({
   onCancel,
   onResume,
   onRemoveFile,
+  onRetryHealth,
 }: ChatPanelProps) {
   const [goal, setGoal] = useState('');
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -63,7 +65,13 @@ export default function ChatPanel({
 
       {offline && (
         <div className="banner warn">
-          LM Studio is unreachable at {health?.lmStudio.baseUrl}. Start the local server, load a model, then reload.
+          <span>
+            No model server is answering at {health?.lmStudio.baseUrl}. The agent still runs — start LM
+            Studio (or pick another provider under Models) and it will connect on the next request.
+          </span>
+          <button className="btn ghost small" onClick={onRetryHealth}>
+            Check again
+          </button>
         </div>
       )}
 
@@ -138,7 +146,7 @@ export default function ChatPanel({
                   Resume
                 </button>
               )}
-              <button className="btn primary" onClick={submit} disabled={!goal.trim() || offline}>
+              <button className="btn primary" onClick={submit} disabled={!goal.trim()}>
                 Run agent
               </button>
             </>

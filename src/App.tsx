@@ -438,6 +438,7 @@ export default function App() {
           onCancel={cancelRun}
           onResume={() => session.runId && resumeRun(session.runId)}
           onRemoveFile={(path) => setSelected((prev) => prev.filter((entry) => entry !== path))}
+          onRetryHealth={() => void refreshHealth()}
         />
       </div>
 

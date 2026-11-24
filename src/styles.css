@@ -762,6 +762,14 @@ code {
   background: #241c10;
   border: 1px solid #4a3a15;
   color: #f6c177;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.banner.warn .btn {
+  flex: none;
+  margin-left: auto;
 }
 
 .transcript {
