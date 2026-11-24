@@ -147,6 +147,10 @@ export interface LMStudioClientOptions {
   maxTokens?: number;
   timeoutMs?: number;
   maxAttempts?: number;
+  /** Endpoint name used in user-facing errors (defaults to LM Studio). */
+  endpointLabel?: string;
+  /** Extra guidance appended to transport errors, e.g. for free-tier limits. */
+  errorHint?: string;
   fetchImpl?: typeof fetch;
   breaker?: CircuitBreaker;
   onRetry?: (info: { attempt: number; delayMs: number; error: unknown }) => void;
@@ -165,6 +169,8 @@ export class LMStudioClient {
   private readonly maxTokens: number;
   private readonly timeoutMs: number;
   private readonly maxAttempts: number;
+  private readonly label: string;
+  private readonly errorHint?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly breaker: CircuitBreaker;
   private readonly onRetry?: LMStudioClientOptions['onRetry'];
@@ -178,6 +184,8 @@ export class LMStudioClient {
     this.maxTokens = options.maxTokens ?? 2048;
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.maxAttempts = Math.max(1, options.maxAttempts ?? 4);
+    this.label = options.endpointLabel ?? 'LM Studio';
+    this.errorHint = options.errorHint;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.breaker = options.breaker ?? new CircuitBreaker();
     this.onRetry = options.onRetry;
@@ -232,7 +240,7 @@ export class LMStudioClient {
   async chat(request: ChatRequest, onDelta?: (text: string) => void): Promise<ChatResult> {
     if (!this.breaker.canRequest()) {
       throw new LLMError(
-        `LM Studio appears offline (circuit open after ${this.breaker.failureCount} failures). Start the server in LM Studio and load a model, then retry.`,
+        `${this.label} appears offline (circuit open after ${this.breaker.failureCount} failures). Check the endpoint and retry.${this.hintSuffix()}`,
         { retryable: false, kind: 'circuit-open' },
       );
     }
@@ -316,7 +324,7 @@ export class LMStudioClient {
         const text = await response.text().catch(() => '');
         const retryable = RETRYABLE_STATUS.has(response.status);
         throw new LLMError(
-          `LM Studio returned HTTP ${response.status}${text ? `: ${snippet(text)}` : ''}`,
+          `${this.label} returned HTTP ${response.status}${text ? `: ${snippet(text)}` : ''}${this.hintSuffix(response.status)}`,
           { status: response.status, retryable, kind: 'http' },
         );
       }
@@ -356,7 +364,7 @@ export class LMStudioClient {
 
   private async readStream(response: Response, model: string, onDelta: (text: string) => void): Promise<ChatResult> {
     if (!response.body) {
-      throw new LLMError('LM Studio returned an empty stream.', { retryable: true, kind: 'protocol' });
+      throw new LLMError(`${this.label} returned an empty stream.`, { retryable: true, kind: 'protocol' });
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -467,6 +475,12 @@ export class LMStudioClient {
     return fn().finally(() => external?.removeEventListener('abort', onExternalAbort));
   }
 
+  private hintSuffix(status?: number): string {
+    if (!this.errorHint) return '';
+    if (status !== undefined && status !== 403 && status !== 429) return '';
+    return ` ${this.errorHint}`;
+  }
+
   private wrapTransportError(error: unknown, external?: AbortSignal): unknown {
     if (error instanceof LLMError) return error;
     const e = error as { name?: string; message?: string; code?: string };
@@ -475,12 +489,12 @@ export class LMStudioClient {
         return new LLMError('Request cancelled.', { retryable: false, kind: 'aborted' });
       }
       return new LLMError(
-        `LM Studio did not respond within ${Math.round(this.timeoutMs / 1000)}s. A local model may still be loading.`,
+        `${this.label} did not respond within ${Math.round(this.timeoutMs / 1000)}s. ${this.label === 'LM Studio' ? 'A local model may still be loading.' : 'Check the endpoint and retry.'}${this.hintSuffix()}`,
         { retryable: true, kind: 'timeout' },
       );
     }
     return new LLMError(
-      `Could not reach LM Studio at ${this.baseUrl}: ${e?.message ?? String(error)}. Is the local server running with a model loaded?`,
+      `Could not reach ${this.label} at ${this.baseUrl}: ${e?.message ?? String(error)}. Check that the endpoint is running and reachable.${this.hintSuffix()}`,
       { retryable: isRetryableError(error), kind: 'network' },
     );
   }

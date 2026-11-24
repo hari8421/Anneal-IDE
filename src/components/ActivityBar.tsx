@@ -1,7 +1,7 @@
 import { Icon, type IconName } from './Icon';
 
 export type ActivityKey =
-  | 'files' | 'search' | 'specs' | 'steering' | 'hooks' | 'runs' | 'checkpoints'
+  | 'files' | 'search' | 'specs' | 'steering' | 'skills' | 'hooks' | 'runs' | 'checkpoints'
   | 'models' | 'mcp' | 'debug' | 'settings';
 
 const MAIN: Array<{ key: ActivityKey; icon: IconName; label: string }> = [
@@ -9,6 +9,7 @@ const MAIN: Array<{ key: ActivityKey; icon: IconName; label: string }> = [
   { key: 'search', icon: 'search', label: 'Search' },
   { key: 'specs', icon: 'specs', label: 'Specs' },
   { key: 'steering', icon: 'steering', label: 'Steering rules' },
+  { key: 'skills', icon: 'sparkles', label: 'Skills' },
   { key: 'hooks', icon: 'hooks', label: 'Hooks' },
   { key: 'runs', icon: 'runs', label: 'Agent runs' },
   { key: 'checkpoints', icon: 'undo', label: 'Checkpoints' },

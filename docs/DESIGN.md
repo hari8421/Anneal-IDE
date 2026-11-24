@@ -50,17 +50,17 @@ survive its own failures. `anneal` provides that workflow for people who run mod
 │                              service.ts (orchestration)                           │
 │      ┌──────────────┬──────────────┼───────────────┬──────────────────┐          │
 │      ▼              ▼              ▼               ▼                  ▼          │
-│  agent/loop    spec/store+gen   hooks/engine   steering/load     mcp/client      │
+│  agent/loop    spec/store+gen   hooks/engine   steering/skills   mcp/client      │
 │      │              │              │               │                  │          │
 │      ├── context/builder ── tokens                                              │
 │      ├── agent/journal (JSONL, fsync)                                            │
 │      ├── agent/checkpoints (snapshot store)                                      │
 │      ├── tools (read/write/patch/list/search/run)  ← path sandbox                │
-│      └── llm/client (LM Studio, SSE, retry, breaker)                             │
+│      └── llm/client (OpenAI-compatible, SSE, retry, breaker)                             │
 └──────────────────────────────────────────────────────────────────────────────────┘
                                 │  HTTP /v1
                         ┌───────▼────────┐
-                        │   LM Studio    │  local model (tool calling)
+                        │ selected host  │  LM Studio default; hosted opt-in
                         └────────────────┘
 ```
 
@@ -74,6 +74,8 @@ Everything stateful lives under `.anneal/` in the workspace:
   checkpoints/<id>/{manifest.json,files/…}
   hooks/*.json
   steering/*.md
+  skills/<id>/SKILL.md
+  memory/{facts.jsonl,core.md,events.jsonl}
   mcp.json
 ```
 
@@ -269,6 +271,7 @@ failed memory write is swallowed for run events and surfaced as a tool error for
 | `provider` | base URL | model | auth |
 | --- | --- | --- | --- |
 | `lmstudio` (default) | `lmStudioBaseUrl` | `model` | none |
+| `opencode` (manual opt-in) | `opencodeBaseUrl` (default `https://opencode.ai/inference/openai/v1`) | `opencodeModel`, falling back to `model` | `Bearer opencodeApiKey` if set |
 | `external` | `externalBaseUrl` | `externalModel`, falling back to `model` | `Bearer externalApiKey` if set |
 
 Layering is unchanged (defaults ← `.anneal/config.json` ← environment ← overrides), so
@@ -276,6 +279,19 @@ Layering is unchanged (defaults ← `.anneal/config.json` ← environment ← ov
 `lmstudio` rather than failing the boot. Because the client only speaks `/chat/completions` with
 SSE and tool calls, no per-vendor code exists: the switch is three config fields plus the
 `apiKey` the client already supported.
+
+`opencode` is only selected by the user in the first-run flow or the Models tab; the default stays
+local. `server/providers/opencode.ts` reads the public catalog (`/inference/v1/models`), marks
+zero-cost entries as free, and lets the UI offer real model ids. The API only speaks chat
+completions, and OpenCode restricts free-tier models to its own app, so a 403/429 is surfaced with
+an explicit hint to add a key or pick another endpoint. The client takes an `endpointLabel` and an
+`errorHint` so errors name the selected provider instead of always blaming LM Studio.
+
+Workspace skills (`server/skills/skills.ts`) are Markdown workflow packs in
+`.anneal/skills/<id>/SKILL.md`, using the same frontmatter layout as OpenCode skills. `loadSkills()`
+reads them, `skillSections()` injects `auto: true` packs into every run's context, and spec
+generation receives the same instructions. CRUD is exposed at `/api/skills` and edited in the
+Skills panel.
 
 ### 3.13 Desktop packaging
 
@@ -387,7 +403,9 @@ model.
 | MCP | `mcp.test.ts` | initialize/list/call over stdio, config validation |
 | HTTP API | `http-api.test.ts` | live server: health offline, file CRUD, 400 on escape, specs, checkpoints |
 | Agent memory | `memory.test.ts` | fact dedup by key, forget, core rendering + line cap, event ordering/pruning, empty store |
-| Provider switch | `provider.test.ts` | local default, external from env, external from config.json, local-model fallback, unknown provider degrades |
+| Provider switch | `provider.test.ts` | local default, OpenCode resolution/env overrides, external from env/config, local-model fallback, unknown provider degrades |
+| OpenCode catalog | `opencode-catalog.test.ts` | catalog URL derivation, free/paid normalization, upstream failure |
+| Skills | `skills.test.ts` | frontmatter parsing, nested SKILL.md discovery, auto-only injection, id sanitisation |
 | Language service | `intel.test.ts` | source filters, ignored dirs, file/size caps, truncation |
 | Debugger | `debug.test.ts` | breakpoint pause, locals, in-frame evaluation, stepping, missing/escaping script rejection |
 
@@ -410,7 +428,8 @@ model.
 | Debugger (breakpoints, step, variables, evaluate) | ✅ | Node inspector via CDP; other runtimes need DAP |
 | Peek/navigation (definition, usages, hover, outline) | ✅ | Monaco TS service over the workspace; JS/TS only |
 | Autonomous "agent runs tests until green" | ⚠️ | Agent can run tests; no dedicated loop budget |
-| Model routing between providers | ✅ | `provider` switch: LM Studio or any OpenAI-compatible API |
+| Model routing between providers | ✅ | `provider` switch: LM Studio, opt-in OpenCode, or any OpenAI-compatible API |
+| Reusable skills (`SKILL.md`) | ✅ | `.anneal/skills/<id>/SKILL.md`, auto-injected into runs and specs |
 | Cross-run agent memory | ⚠️ | Pinned facts + run journal; no semantic recall over events |
 
 ---

@@ -6,7 +6,25 @@ export interface ModelInfo {
   state?: string;
 }
 
-export type ModelProvider = 'lmstudio' | 'external';
+export interface OpenCodeModel {
+  id: string;
+  name: string;
+  description?: string;
+  free: boolean;
+  context?: number;
+  recommendedApi?: string;
+}
+
+export type ModelProvider = 'lmstudio' | 'opencode' | 'external';
+
+export interface SkillInfo {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  auto: boolean;
+  length: number;
+}
 
 export interface MemoryFact {
   key: string;
@@ -44,6 +62,9 @@ export interface Health {
     externalBaseUrl: string;
     externalModel: string;
     hasApiKey: boolean;
+    opencodeBaseUrl: string;
+    opencodeModel: string;
+    hasOpenCodeApiKey: boolean;
     contextBudgetTokens: number;
     autonomy: Autonomy;
     maxSteps: number;
@@ -178,6 +199,7 @@ export const api = {
   forgetMemoryFact: (key: string) =>
     request<{ removed: boolean }>(`/api/memory/facts/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   models: () => request<{ models: ModelInfo[] }>('/api/models'),
+  opencodeModels: () => request<{ models: OpenCodeModel[] }>('/api/opencode/models'),
   updateConfig: (patch: Record<string, unknown>) =>
     request<{ config: Health['config'] }>('/api/config', {
       method: 'POST',
@@ -250,6 +272,15 @@ export const api = {
     }),
   deleteSteering: (name: string) =>
     request<{ removed: boolean }>(`/api/steering/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  skills: () => request<{ skills: SkillInfo[] }>('/api/skills'),
+  writeSkill: (name: string, content: string) =>
+    request<{ ok: boolean; id: string }>('/api/skills', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, content }),
+    }),
+  deleteSkill: (id: string) =>
+    request<{ removed: boolean }>(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   approveToolCall: (runId: string, approved: boolean) =>
     request<{ resolved: boolean; approved: boolean }>(`/api/runs/${encodeURIComponent(runId)}/approve`, {
       method: 'POST',

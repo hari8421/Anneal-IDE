@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-10
 Branch: `main`
-Stage: **M2 — local-first agentic IDE with desktop executables, pluggable providers and cross-run agent memory.**
+Stage: **M2 — local-first agentic IDE with desktop executables, opt-in hosted providers, reusable skills and cross-run agent memory.**
 
 ---
 
@@ -10,7 +10,7 @@ Stage: **M2 — local-first agentic IDE with desktop executables, pluggable prov
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Unit + integration tests | `npm test` | **16 files, 122 tests passing** (5 new: SSE transcript reducer) |
+| Unit + integration tests | `npm test` | **19 files, 144 tests passing** (OpenCode catalog, skills, provider config) |
 | Type safety | `npm run typecheck` (`tsc --noEmit`) | passing |
 | Production bundle | `npm run build` (typecheck + `vite build`) | passing |
 | Desktop executables | `node scripts/build-desktop.mjs` | **exit 0**, three binaries (Linux 78 MB, macOS arm64 70 MB, Windows 97 MB) |
@@ -38,10 +38,12 @@ overflow, cancellation and resume paths.
 
 ### Model layer
 - [x] OpenAI-compatible client for LM Studio (`server/llm/client.ts`)
-- [x] **Provider switch**: LM Studio (default) or any external OpenAI-compatible API
-      (`provider`, `externalBaseUrl`, `externalModel`, `externalApiKey`)
-- [x] API key sent as a bearer token; key lives in `.anneal/config.json` (git-ignored) or
-      `ANNEAL_EXTERNAL_API_KEY`
+- [x] **Provider switch**: LM Studio (default), manually selected OpenCode inference, or any
+      external OpenAI-compatible API
+- [x] OpenCode catalog (`GET /api/opencode/models`) flags free models; 403/429 errors explain that
+      free tiers are app-only and suggest a key or another endpoint
+- [x] API key sent as a bearer token; key lives in `.anneal/config.json` (git-ignored) or the
+      matching `ANNEAL_*_API_KEY` variable
 - [x] SSE streaming with incremental assistant text
 - [x] Tool-call assembly from fragmented deltas
 - [x] Model discovery with context length (`GET /models`)
@@ -130,6 +132,8 @@ overflow, cancellation and resume paths.
 - [x] Hooks: fileEdited/Created/Deleted, taskCompleted, agentStop, manual → agent or command
 - [x] Hook failure isolation
 - [x] Steering files with `always` / `auto` / `manual` inclusion
+- [x] Skills: reusable `SKILL.md` workflow packs under `.anneal/skills/`, injected into runs and
+      spec generation, with CRUD in the Skills panel
 - [x] MCP stdio client (initialize, tools/list, tools/call) with namespaced tools
 
 ### API + UI
@@ -137,6 +141,7 @@ overflow, cancellation and resume paths.
 - [x] Single router in `server/http.ts`; `server/index.ts` only boots it
 - [x] File CRUD with workspace sandboxing
 - [x] Config API (provider, endpoints, model, budget, autonomy, commands)
+- [x] OpenCode model catalog and skills CRUD API
 - [x] Memory API (snapshot, add fact, forget fact)
 - [x] React UI: file tree, Monaco editor with local workers, chat transcript, spec panel, hooks
       panel, undo/checkpoint panel, runs panel, models + memory panel, status bar
@@ -152,7 +157,7 @@ overflow, cancellation and resume paths.
 ### Documentation / examples
 - [x] `README.md` (setup, desktop build, providers, memory, feature map, safety)
 - [x] `docs/DESIGN.md` (architecture, module contracts, failure matrix, parity, roadmap)
-- [x] `.anneal.example/` config, hook and steering samples
+- [x] `.anneal.example/` config, hook, steering and skill samples
 
 ---
 
@@ -165,7 +170,7 @@ overflow, cancellation and resume paths.
 | Per-task verify commands | Roadmap |
 | Embedding-based retrieval | Lexical retrieval is implemented; embeddings need a local embeddings endpoint |
 | Auto-rollback after failure | Rejected on purpose: silently reverting user edits is worse than failing loudly |
-| Bundled provider presets (OpenAI/Groq/…) | The provider option is generic on purpose: any OpenAI-compatible base URL works, so no vendor is hard-coded |
+| Bundled provider presets (OpenAI/Groq/…) | The generic external option covers them; only OpenCode has a preset + catalog, because it was explicitly requested |
 
 ---
 

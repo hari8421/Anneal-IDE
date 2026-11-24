@@ -11,6 +11,8 @@ import { HookEngine, loadHooks, type HookDefinition, type HookEvent, type HookRu
 import { LMStudioClient, type ChatMessage } from './llm/client';
 import { AgentMemory, type Fact, type MemorySnapshot } from './memory';
 import { loadMcpConfig, McpClient, mcpTools, type McpTool } from './mcp/client';
+import { OPENCODE_FREE_HINT } from './providers/opencode';
+import { loadSkills, safeSkillId, skillSections } from './skills/skills';
 import { generateSpec, type GenerateSpecResult } from './spec/generator';
 import { SpecStore, parseTasks, type SpecTask } from './spec/spec';
 import { loadSteering, selectSteering, steeringSections } from './steering/steering';
@@ -79,6 +81,9 @@ export class AnnealService {
       maxTokens: this.config.maxTokens,
       timeoutMs: this.config.requestTimeoutMs,
       maxAttempts: this.config.selfHeal ? this.config.maxAttempts : 1,
+      ...(endpoint.provider === 'opencode'
+        ? { endpointLabel: 'OpenCode', errorHint: OPENCODE_FREE_HINT }
+        : {}),
     });
   }
 
@@ -91,6 +96,7 @@ export class AnnealService {
       ensureDir(paths.checkpoints),
       ensureDir(paths.hooks),
       ensureDir(paths.steering),
+      ensureDir(paths.skills),
     ]);
     await this.memory.init();
     await this.reloadHooks();
@@ -120,6 +126,9 @@ export class AnnealService {
       externalBaseUrl: next.externalBaseUrl,
       externalModel: next.externalModel,
       externalApiKey: next.externalApiKey,
+      opencodeBaseUrl: next.opencodeBaseUrl,
+      opencodeModel: next.opencodeModel,
+      opencodeApiKey: next.opencodeApiKey,
       temperature: next.temperature,
       maxTokens: next.maxTokens,
       contextBudgetTokens: next.contextBudgetTokens,
@@ -157,6 +166,9 @@ export class AnnealService {
         externalBaseUrl: this.config.externalBaseUrl,
         externalModel: this.config.externalModel,
         hasApiKey: Boolean(this.config.externalApiKey),
+        opencodeBaseUrl: this.config.opencodeBaseUrl,
+        opencodeModel: this.config.opencodeModel,
+        hasOpenCodeApiKey: Boolean(this.config.opencodeApiKey),
         contextBudgetTokens: this.config.contextBudgetTokens,
         autonomy: this.config.autonomy,
         maxSteps: this.config.maxAgentSteps,
@@ -205,6 +217,8 @@ export class AnnealService {
     }
     const steering = await loadSteering(annealPaths(this.config.workspaceRoot).steering);
     sections.push(...steeringSections(selectSteering(steering, files)));
+    const skills = await loadSkills(annealPaths(this.config.workspaceRoot).skills);
+    sections.push(...skillSections(skills));
 
     if (specId) {
       const spec = await this.specStore.read(specId);
@@ -443,12 +457,16 @@ export class AnnealService {
     const steering = (await loadSteering(annealPaths(this.config.workspaceRoot).steering))
       .map((file) => `## ${file.name}\n${file.content}`)
       .join('\n\n');
+    const skills = (await loadSkills(annealPaths(this.config.workspaceRoot).skills))
+      .filter((skill) => skill.auto)
+      .map((skill) => `## ${skill.name}\n${skill.content}`)
+      .join('\n\n');
     return generateSpec({
       client: this.client,
       store: this.specStore,
       id,
       featureRequest,
-      steering,
+      steering: [steering, skills].filter(Boolean).join('\n\n'),
       signal: options.signal,
       onDelta: (stage, text) => options.onDelta?.(stage, text),
       onStage: (stage, status) => options.onStage?.(stage, status),
@@ -582,6 +600,33 @@ export class AnnealService {
     } catch {
       return false;
     }
+  }
+
+  async skills() {
+    return loadSkills(annealPaths(this.config.workspaceRoot).skills);
+  }
+
+  /** Create or update a skill in `.anneal/skills/<id>/SKILL.md`. */
+  async writeSkill(name: string, content: string): Promise<string> {
+    const id = safeSkillId(name);
+    const dir = path.join(annealPaths(this.config.workspaceRoot).skills, id);
+    await fs.mkdir(dir, { recursive: true });
+    const body = content.trimStart().startsWith('---')
+      ? content
+      : `---\nname: ${id}\ndescription: Reusable ${id} workflow\n---\n\n${content}`;
+    await fs.writeFile(path.join(dir, 'SKILL.md'), body, 'utf8');
+    return id;
+  }
+
+  async deleteSkill(name: string): Promise<boolean> {
+    const dir = path.join(annealPaths(this.config.workspaceRoot).skills, safeSkillId(name));
+    try {
+      await fs.stat(dir);
+    } catch {
+      return false;
+    }
+    await fs.rm(dir, { recursive: true, force: true });
+    return true;
   }
 
   /**

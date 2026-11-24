@@ -88,6 +88,61 @@ describe('HTTP API', () => {
     expect(restore.status).toBe(200);
   });
 
+  it('persists a manually selected OpenCode provider through the config API', async () => {
+    const update = await fetch(`${baseUrl}/api/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'opencode', opencodeModel: 'big-pickle', opencodeApiKey: 'op-test' }),
+    });
+    expect(update.status).toBe(200);
+    const updated = (await update.json()) as { config: { provider: string; opencodeModel: string; opencodeApiKey: string } };
+    expect(updated.config.provider).toBe('opencode');
+    expect(updated.config.opencodeModel).toBe('big-pickle');
+    expect(updated.config.opencodeApiKey).toBe('op-test');
+
+    const health = (await (await fetch(`${baseUrl}/api/health`)).json()) as {
+      config: { hasOpenCodeApiKey: boolean };
+    };
+    expect(health.config.hasOpenCodeApiKey).toBe(true);
+
+    const persisted = JSON.parse(await fs.readFile(path.join(workspace, '.anneal/config.json'), 'utf8')) as {
+      provider: string;
+      opencodeModel: string;
+    };
+    expect(persisted.provider).toBe('opencode');
+    expect(persisted.opencodeModel).toBe('big-pickle');
+
+    const restore = await fetch(`${baseUrl}/api/config`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: 'lmstudio', opencodeApiKey: '' }),
+    });
+    expect(restore.status).toBe(200);
+  });
+
+  it('creates, lists and deletes workspace skills', async () => {
+    const create = await fetch(`${baseUrl}/api/skills`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'release-check', content: '---\nname: Release check\n---\n\n# Steps\nRun the tests.\n' }),
+    });
+    expect(create.status).toBe(200);
+    const { id } = (await create.json()) as { id: string };
+    expect(id).toBe('release-check');
+
+    const list = (await (await fetch(`${baseUrl}/api/skills`)).json()) as {
+      skills: Array<{ id: string; name: string; auto: boolean }>;
+    };
+    expect(list.skills.some((skill) => skill.id === 'release-check' && skill.name === 'Release check' && skill.auto)).toBe(true);
+    const stored = await fs.readFile(path.join(workspace, '.anneal/skills/release-check/SKILL.md'), 'utf8');
+    expect(stored).toContain('Run the tests.');
+
+    const removed = await fetch(`${baseUrl}/api/skills/release-check`, { method: 'DELETE' });
+    expect(removed.status).toBe(200);
+    const after = (await (await fetch(`${baseUrl}/api/skills`)).json()) as { skills: Array<{ id: string }> };
+    expect(after.skills.some((skill) => skill.id === 'release-check')).toBe(false);
+  });
+
   it('lists, reads, writes and deletes workspace files', async () => {
     const tree = (await (await fetch(`${baseUrl}/api/files`)).json()) as { tree: Array<{ name: string }> };
     expect(tree.tree.some((node) => node.name === 'src')).toBe(true);

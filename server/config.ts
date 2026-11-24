@@ -3,8 +3,8 @@ import path from 'node:path';
 
 export type Autonomy = 'autopilot' | 'supervised';
 
-/** Where completions come from: a local LM Studio server or a hosted API. */
-export type ModelProvider = 'lmstudio' | 'external';
+/** Where completions come from: local LM Studio, OpenCode's inference API, or any OpenAI-compatible host. */
+export type ModelProvider = 'lmstudio' | 'opencode' | 'external';
 
 export interface AnnealConfig {
   /** Absolute path of the workspace the agent is allowed to touch. */
@@ -21,6 +21,12 @@ export interface AnnealConfig {
   externalModel: string;
   /** Bearer token for the external provider. Supplied by env, never written to config.json. */
   externalApiKey: string;
+  /** OpenAI-compatible base URL used when `provider` is 'opencode'. */
+  opencodeBaseUrl: string;
+  /** Model id from the OpenCode inference catalog. */
+  opencodeModel: string;
+  /** Optional OpenCode Console/Go key; free models are app-only without one. */
+  opencodeApiKey: string;
   temperature: number;
   /** Max completion tokens requested per call. */
   maxTokens: number;
@@ -48,6 +54,9 @@ export const DEFAULT_CONFIG: Omit<AnnealConfig, 'workspaceRoot'> = {
   externalBaseUrl: 'https://api.openai.com/v1',
   externalModel: '',
   externalApiKey: '',
+  opencodeBaseUrl: 'https://opencode.ai/inference/openai/v1',
+  opencodeModel: 'mimo-v2.6-flash-free',
+  opencodeApiKey: '',
   temperature: 0.2,
   maxTokens: 2048,
   contextBudgetTokens: 8192,
@@ -70,6 +79,7 @@ export interface AnnealPaths {
   checkpoints: string;
   hooks: string;
   steering: string;
+  skills: string;
   mcp: string;
 }
 
@@ -83,6 +93,7 @@ export function annealPaths(workspaceRoot: string): AnnealPaths {
     checkpoints: path.join(anneal, 'checkpoints'),
     hooks: path.join(anneal, 'hooks'),
     steering: path.join(anneal, 'steering'),
+    skills: path.join(anneal, 'skills'),
     mcp: path.join(anneal, 'mcp.json'),
   };
 }
@@ -113,6 +124,11 @@ function str(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
+function parseProvider(value: unknown, fallback: ModelProvider): ModelProvider {
+  const raw = str(value, fallback);
+  return raw === 'lmstudio' || raw === 'opencode' || raw === 'external' ? raw : 'lmstudio';
+}
+
 export interface LoadConfigOptions {
   workspaceRoot?: string;
   env?: NodeJS.ProcessEnv;
@@ -138,8 +154,7 @@ export function loadConfig(options: LoadConfigOptions = {}): AnnealConfig {
       DEFAULT_CONFIG.lmStudioBaseUrl,
     ),
     model: str(env.ANNEAL_MODEL ?? file.model, DEFAULT_CONFIG.model),
-    provider:
-      str(env.ANNEAL_PROVIDER ?? file.provider, DEFAULT_CONFIG.provider) === 'external' ? 'external' : 'lmstudio',
+    provider: parseProvider(env.ANNEAL_PROVIDER ?? file.provider, DEFAULT_CONFIG.provider),
     externalBaseUrl: str(
       env.ANNEAL_EXTERNAL_BASE_URL ?? file.externalBaseUrl,
       DEFAULT_CONFIG.externalBaseUrl,
@@ -149,6 +164,12 @@ export function loadConfig(options: LoadConfigOptions = {}): AnnealConfig {
       env.ANNEAL_EXTERNAL_API_KEY ?? file.externalApiKey,
       DEFAULT_CONFIG.externalApiKey,
     ),
+    opencodeBaseUrl: str(
+      env.ANNEAL_OPENCODE_BASE_URL ?? file.opencodeBaseUrl,
+      DEFAULT_CONFIG.opencodeBaseUrl,
+    ),
+    opencodeModel: str(env.ANNEAL_OPENCODE_MODEL ?? file.opencodeModel, DEFAULT_CONFIG.opencodeModel),
+    opencodeApiKey: str(env.ANNEAL_OPENCODE_API_KEY ?? file.opencodeApiKey, DEFAULT_CONFIG.opencodeApiKey),
     temperature: num(env.ANNEAL_TEMPERATURE ?? file.temperature, DEFAULT_CONFIG.temperature),
     maxTokens: num(env.ANNEAL_MAX_TOKENS ?? file.maxTokens, DEFAULT_CONFIG.maxTokens),
     contextBudgetTokens: Math.max(
@@ -188,6 +209,14 @@ export interface ResolvedEndpoint {
 
 /** The endpoint the LLM client should talk to for this config. */
 export function resolveEndpoint(config: AnnealConfig): ResolvedEndpoint {
+  if (config.provider === 'opencode') {
+    return {
+      provider: 'opencode',
+      baseUrl: config.opencodeBaseUrl,
+      model: config.opencodeModel || config.model,
+      ...(config.opencodeApiKey ? { apiKey: config.opencodeApiKey } : {}),
+    };
+  }
   if (config.provider === 'external') {
     return {
       provider: 'external',

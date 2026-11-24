@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { loadConfig } from './config';
+import { loadConfig, resolveEndpoint } from './config';
 import { DebugSession, type DebugAction } from './debug/session';
 import { collectSources } from './intel/sources';
+import { fetchOpenCodeModels } from './providers/opencode';
 import { createService, type AnnealService } from './service';
 import { loadSteering } from './steering/steering';
 import { checkCommandAllowed, runCommandTool, searchTool, type ToolContext } from './tools';
@@ -278,6 +279,15 @@ function registerRoutes(): void {
     }
   });
 
+  route('GET', '/api/opencode/models', async ({ res }) => {
+    try {
+      const models = await fetchOpenCodeModels({ baseUrl: service.config.opencodeBaseUrl });
+      json(res, 200, { models });
+    } catch (error) {
+      json(res, 502, { error: (error as Error).message, models: [] });
+    }
+  });
+
   route('GET', '/api/workspace', async ({ res }) => {
     json(res, 200, { root: workspaceRoot(), preference: readWorkspacePreference() ?? null });
   });
@@ -317,10 +327,15 @@ function registerRoutes(): void {
     const patch: Record<string, unknown> = {};
     if (typeof body.model === 'string') patch.model = body.model;
     if (typeof body.lmStudioBaseUrl === 'string') patch.lmStudioBaseUrl = body.lmStudioBaseUrl;
-    if (body.provider === 'lmstudio' || body.provider === 'external') patch.provider = body.provider;
+    if (body.provider === 'lmstudio' || body.provider === 'opencode' || body.provider === 'external') {
+      patch.provider = body.provider;
+    }
     if (typeof body.externalBaseUrl === 'string') patch.externalBaseUrl = body.externalBaseUrl;
     if (typeof body.externalModel === 'string') patch.externalModel = body.externalModel;
     if (typeof body.externalApiKey === 'string') patch.externalApiKey = body.externalApiKey;
+    if (typeof body.opencodeBaseUrl === 'string') patch.opencodeBaseUrl = body.opencodeBaseUrl;
+    if (typeof body.opencodeModel === 'string') patch.opencodeModel = body.opencodeModel;
+    if (typeof body.opencodeApiKey === 'string') patch.opencodeApiKey = body.opencodeApiKey;
     if (typeof body.contextBudgetTokens === 'number') patch.contextBudgetTokens = body.contextBudgetTokens;
     if (body.autonomy === 'autopilot' || body.autonomy === 'supervised') patch.autonomy = body.autonomy;
     if (typeof body.maxAgentSteps === 'number') patch.maxAgentSteps = body.maxAgentSteps;
@@ -742,6 +757,37 @@ function registerRoutes(): void {
     json(res, removed ? 200 : 404, { removed });
   });
 
+  route('GET', '/api/skills', async ({ res }) => {
+    const skills = await service.skills();
+    json(res, 200, {
+      skills: skills.map(({ id, name, description, content, auto }) => ({
+        id,
+        name,
+        description,
+        content,
+        auto,
+        length: content.length,
+      })),
+    });
+  });
+
+  route('POST', '/api/skills', async ({ req, res }) => {
+    const body = await readJson(req);
+    const name = text(body.name).trim();
+    const content = text(body.content);
+    if (!name) {
+      json(res, 400, { error: 'name is required' });
+      return;
+    }
+    const id = await service.writeSkill(name, content);
+    json(res, 200, { ok: true, id });
+  });
+
+  route('DELETE', '/api/skills/:id', async ({ res, params }) => {
+    const removed = await service.deleteSkill(params.id ?? '');
+    json(res, removed ? 200 : 404, { removed });
+  });
+
   route('POST', '/api/runs/:id/approve', async ({ req, res, params }) => {
     const body = await readJson(req);
     const approved = body.approved !== false;
@@ -880,7 +926,8 @@ export async function createServer({ workspace, embeddedDist }: ServerOptions): 
   server.listen(PORT, HOST, () => {
     console.log(`[anneal] API listening on http://${HOST}:${PORT}`);
     console.log(`[anneal] workspace: ${workspace}`);
-    console.log(`[anneal] LM Studio: ${config.lmStudioBaseUrl} (model: ${config.model})`);
+    const endpoint = resolveEndpoint(config);
+    console.log(`[anneal] model provider: ${endpoint.provider} — ${endpoint.baseUrl} (model: ${endpoint.model})`);
     started = Promise.resolve();
   });
 

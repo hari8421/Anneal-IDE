@@ -53,6 +53,36 @@ describe('model provider config', () => {
     });
   });
 
+  it('uses the manually selected OpenCode endpoint', async () => {
+    const dir = await workspace({
+      provider: 'opencode',
+      opencodeModel: 'big-pickle',
+      opencodeApiKey: 'op-key',
+    });
+    const config = loadConfig({ workspaceRoot: dir, env: {} });
+
+    expect(config.provider).toBe('opencode');
+    expect(resolveEndpoint(config)).toEqual({
+      provider: 'opencode',
+      baseUrl: 'https://opencode.ai/inference/openai/v1',
+      model: 'big-pickle',
+      apiKey: 'op-key',
+    });
+  });
+
+  it('lets the environment override stored OpenCode fields', async () => {
+    const dir = await workspace({ provider: 'opencode', opencodeModel: 'from-file' });
+    const config = loadConfig({
+      workspaceRoot: dir,
+      env: { ANNEAL_OPENCODE_BASE_URL: 'https://host/inference/openai/v1', ANNEAL_OPENCODE_MODEL: 'from-env' },
+    });
+    const endpoint = resolveEndpoint(config);
+
+    expect(endpoint.baseUrl).toBe('https://host/inference/openai/v1');
+    expect(endpoint.model).toBe('from-env');
+    expect(endpoint.apiKey).toBeUndefined();
+  });
+
   it('falls back to the local model name when no external model is set', async () => {
     const dir = await workspace({ provider: 'external', model: 'local-model', externalBaseUrl: 'https://host/v1' });
     const endpoint = resolveEndpoint(loadConfig({ workspaceRoot: dir, env: {} }));

@@ -2,8 +2,9 @@
 
 ![CI](https://github.com/hari8421/genieIDE/actions/workflows/ci.yml/badge.svg)
 
-A local-first, spec-driven agentic IDE where every model call goes to **your own LM Studio
-server**. No cloud account, no API keys, no telemetry.
+A local-first, spec-driven agentic IDE. Model calls go to **your own LM Studio server** by
+default; hosted providers such as OpenCode are available only when you explicitly select them.
+No telemetry either way.
 
 ```
 requirements.md  →  design.md  →  tasks.md  →  agent executes task-by-task
@@ -24,7 +25,9 @@ OpenAI-compatible endpoint.
 | Spec generation (requirements → design → tasks) | ✅ | `server/spec/generator.ts` |
 | Task-by-task execution with checkbox tracking | ✅ | `server/service.ts`, `server/spec/spec.ts` |
 | LM Studio models (list, switch, context length) | ✅ | `server/llm/client.ts` |
+| OpenCode inference provider (manual opt-in, free model catalog) | ✅ | `server/providers/opencode.ts`, `server/config.ts` |
 | External OpenAI-compatible APIs (optional) | ✅ | `server/config.ts`, `server/llm/client.ts` |
+| Skills: reusable `SKILL.md` workflow packs | ✅ | `server/skills/skills.ts`, `src/components/SkillsTab.tsx` |
 | Streaming chat + streaming agent events (SSE) | ✅ | `server/llm/client.ts`, `server/index.ts` |
 | Attach workspace files in Ask / Agent / Spec | ✅ | `src/components/AttachmentPicker.tsx`, `src/App.tsx` |
 | Tool use: read, write, patch, list, search, run | ✅ | `server/tools/index.ts` |
@@ -179,6 +182,50 @@ SSE and tool calls, so OpenAI, Groq, OpenRouter, Together, DeepSeek and self-hos
 work — you need a base URL, a model name and a key, nothing vendor-specific. `.anneal/` is
 git-ignored, and `ANNEAL_EXTERNAL_API_KEY` keeps the key out of any file entirely.
 
+### Using OpenCode models (optional, manual selection)
+
+OpenCode is **never used automatically**. Choose it in the first-run provider step or the Models
+tab:
+
+```json
+{
+  "provider": "opencode",
+  "opencodeBaseUrl": "https://opencode.ai/inference/openai/v1",
+  "opencodeModel": "mimo-v2.6-flash-free",
+  "opencodeApiKey": ""
+}
+```
+
+Environment equivalents: `ANNEAL_PROVIDER=opencode`, `ANNEAL_OPENCODE_BASE_URL`,
+`ANNEAL_OPENCODE_MODEL`, `ANNEAL_OPENCODE_API_KEY`. The Models tab loads the public catalog from
+`https://opencode.ai/inference/v1/models`, shows which entries are free, and falls back to a typed
+model id if the catalog is unreachable. Free-tier chat models are restricted to the OpenCode app:
+from another client you may get a 403/429. Supply an OpenCode Console/Go key or use a different
+endpoint in that case — the error message says so explicitly. Setting the provider back to
+`lmstudio` restores the local-only behaviour.
+
+### Creating skills
+
+The **Skills** panel creates reusable instruction packs in `.anneal/skills/<id>/SKILL.md`, in the
+same format OpenCode uses:
+
+```markdown
+---
+name: Release check
+description: Prepare a release
+auto: true
+---
+
+# Workflow
+1. Summarise merged changes.
+2. Propose a version bump.
+3. Run the release script.
+```
+
+Skills with `auto: true` are injected into every agent prompt and spec-generation request;
+`auto: false` keeps a pack available in the workspace without loading it. CRUD is available through
+`GET/POST/DELETE /api/skills`.
+
 ## Debugging and navigation
 
 The editor is wired to real analysis, not name matching:
@@ -259,9 +306,9 @@ back — including deleting files that did not exist yet.
 
 ![The Models tab with the provider switch and pinned agent memory](docs/images/06-models.png)
 
-Switch between LM Studio and any external OpenAI-compatible API without editing files. Facts under
-*Agent memory* are pinned into every prompt (the agent also writes its own with the `remember`
-tool), which is how conventions survive across runs and restarts.
+Switch between LM Studio, OpenCode, and any external OpenAI-compatible API without editing files;
+hosted providers are opt-in. Facts under *Agent memory* are pinned into every prompt (the agent also
+writes its own with the `remember` tool), which is how conventions survive across runs and restarts.
 
 ### 7. Runs never lose finished work
 
@@ -313,7 +360,9 @@ server/
   agent/        loop.ts (the agent), journal.ts (durability), checkpoints.ts, patch.ts, prompts.ts
   context/      builder.ts (budgeting), retrieval.ts (lexical search)
   llm/          client.ts (LM Studio or any OpenAI-compatible API), retry.ts, structured.ts
+  providers/    opencode.ts (public model catalog)
   memory/       store.ts (facts.jsonl, core.md, events.jsonl)
+  skills/       SKILL.md workflow packs
   intel/        sources.ts (workspace bundle for the language service)
   debug/        session.ts (Node inspector debugger over CDP)
   tools/        sandboxed file/shell tools
@@ -326,7 +375,7 @@ server/
   index.ts      dev entrypoint; boots http.ts
 scripts/        dev.mjs, build-desktop.mjs
 src/            React + Monaco UI (src/editor/intel.ts wires the TS service)
-tests/          vitest suite (122 tests)
+tests/          vitest suite (144 tests)
 docs/DESIGN.md  detailed design
 docs/contributing/  setup, architecture notes and the pull-request guide
 docs/images/    screenshots used by this README
@@ -347,7 +396,8 @@ compaction, patch atomicity, path-escape rejection (including symlinks), journal
 torn writes, checkpoint restore, hook dispatch isolation, spec task parsing, LM Studio SSE
 streaming and tool-call assembly, agent resume without replaying tools, context-overflow
 healing, MCP stdio round-trips, agent memory (fact dedup, core line cap, event pruning), provider
-resolution, the SSE transcript reducer (wrapped agent events vs unwrapped results), and two live
+resolution, OpenCode catalog normalization, skill parsing/loading, the SSE transcript reducer
+(wrapped agent events vs unwrapped results), and two live
 HTTP integration tests against a temp workspace: one for the API surface,
 and one that drives a stub OpenAI-compatible server and asserts against the actual request bodies
 that completions reach the configured provider with its key and that stored facts reach the prompt.

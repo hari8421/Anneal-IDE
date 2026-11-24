@@ -13,6 +13,7 @@ import { McpTab } from './components/McpTab';
 import { CheckpointsTab, HooksTab, ModelsTab, RunsTab } from './components/Panels';
 import SearchPanel from './components/SearchPanel';
 import { SettingsTab } from './components/SettingsTab';
+import { SkillsTab } from './components/SkillsTab';
 import SpecsPanel from './components/SpecsPanel';
 import { SteeringTab } from './components/SteeringTab';
 import QuickOpen from './components/QuickOpen';
@@ -48,6 +49,7 @@ const PANEL_TITLES: Record<ActivityKey, { title: string; icon: IconName; hint?: 
   search: { title: 'Search', icon: 'search' },
   specs: { title: 'Specs', icon: 'specs', hint: 'Requirements → design → tasks' },
   steering: { title: 'Steering', icon: 'steering', hint: 'Rules injected into every run' },
+  skills: { title: 'Skills', icon: 'sparkles', hint: 'Reusable agent workflows' },
   hooks: { title: 'Hooks', icon: 'hooks', hint: 'Event-driven automations' },
   runs: { title: 'Runs', icon: 'runs', hint: 'Journaled agent sessions' },
   checkpoints: { title: 'Checkpoints', icon: 'undo', hint: 'Restore any pre-write snapshot' },
@@ -701,7 +703,7 @@ export default function App() {
       { id: 'autonomy-supervised', title: 'Set autonomy: supervised', category: 'Agent', icon: 'shield', run: () => changeAutonomy('supervised') },
       { id: 'self-heal', title: `Self-healing: ${health?.config.selfHeal === false ? 'off — turn on' : 'on — turn off'}`, category: 'Agent', icon: 'shield', run: () => void changeSelfHeal(!health?.config.selfHeal) },
       { id: 'stop', title: 'Stop running agent', category: 'Agent', icon: 'stop', run: cancelRun },
-      ...(['files', 'search', 'specs', 'steering', 'hooks', 'runs', 'checkpoints', 'models', 'mcp', 'debug', 'settings'] as ActivityKey[]).map((key) => ({
+      ...(['files', 'search', 'specs', 'steering', 'skills', 'hooks', 'runs', 'checkpoints', 'models', 'mcp', 'debug', 'settings'] as ActivityKey[]).map((key) => ({
         id: `view-${key}`, title: `View: ${PANEL_TITLES[key].title}`, category: 'Panels', icon: PANEL_TITLES[key].icon, run: () => show(key),
       })),
     ];
@@ -712,8 +714,15 @@ export default function App() {
   const context = session.context;
   const models = health?.config.provider === 'external'
     ? [{ id: health.config.externalModel || health.config.model }]
-    : health?.lmStudio.models ?? [];
+    : health?.config.provider === 'opencode'
+      ? [{ id: health.config.opencodeModel || health.config.model }]
+      : health?.lmStudio.models ?? [];
   const offline = Boolean(health && health.lmStudio.ok === false && health.config.provider === 'lmstudio');
+  const providerLabel = health?.config.provider === 'opencode'
+    ? 'OpenCode'
+    : health?.config.provider === 'external'
+      ? 'external'
+      : 'local';
 
   const layoutStyle = {
     '--sidebar-w': `${sidebarWidth}px`,
@@ -745,9 +754,9 @@ export default function App() {
           <span className="ui-kbd">⌘P</span>
         </button>
         <div className="ui-title-right">
-          <span className={`ui-status-pill ${offline ? 'off' : health ? 'on' : ''}`} title={health?.lmStudio.baseUrl ?? 'Connecting…'}>
+          <span className={`ui-status-pill ${offline ? 'off' : health ? 'on' : ''}`} title={health?.config.baseUrl ?? 'Connecting…'}>
             <span className="ui-status-dot" />
-            {offline ? 'model offline' : health ? `${health.config.provider === 'external' ? 'external' : 'local'} · ${health.config.model}` : 'connecting…'}
+            {offline ? 'model offline' : health ? `${providerLabel} · ${health.config.model}` : 'connecting…'}
           </span>
           <select
             className="ui-select small"
@@ -856,6 +865,7 @@ export default function App() {
                   />
                 )}
                 {activity === 'steering' && <SteeringTab />}
+                {activity === 'skills' && <SkillsTab />}
                 {activity === 'hooks' && <HooksTab running={session.streaming} />}
                 {activity === 'runs' && (
                   <RunsTab

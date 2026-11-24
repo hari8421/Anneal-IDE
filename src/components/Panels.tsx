@@ -8,6 +8,7 @@ import {
   type HookDefinition,
   type MemorySnapshot,
   type ModelProvider,
+  type OpenCodeModel,
   type RunSummary,
   type SpecDetail,
   type SpecSummary,
@@ -434,6 +435,11 @@ export function ModelsTab({ health, onSaved }: { health: Health | null; onSaved:
   const [externalBaseUrl, setExternalBaseUrl] = useState(health?.config.externalBaseUrl ?? '');
   const [externalModel, setExternalModel] = useState(health?.config.externalModel ?? '');
   const [apiKey, setApiKey] = useState('');
+  const [opencodeBaseUrl, setOpencodeBaseUrl] = useState(health?.config.opencodeBaseUrl ?? 'https://opencode.ai/inference/openai/v1');
+  const [opencodeModel, setOpencodeModel] = useState(health?.config.opencodeModel ?? 'mimo-v2.6-flash-free');
+  const [opencodeKey, setOpencodeKey] = useState('');
+  const [openCodeModels, setOpenCodeModels] = useState<OpenCodeModel[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [memory, setMemory] = useState<MemorySnapshot | null>(null);
   const [factKey, setFactKey] = useState('');
@@ -448,7 +454,18 @@ export function ModelsTab({ health, onSaved }: { health: Health | null; onSaved:
     setLmStudioBaseUrl(health.config.lmStudioBaseUrl);
     setExternalBaseUrl(health.config.externalBaseUrl);
     setExternalModel(health.config.externalModel);
+    setOpencodeBaseUrl(health.config.opencodeBaseUrl);
+    setOpencodeModel(health.config.opencodeModel);
   }, [health]);
+
+  useEffect(() => {
+    if (provider !== 'opencode') return;
+    let cancelled = false;
+    api.opencodeModels()
+      .then(({ models }) => { if (!cancelled) { setOpenCodeModels(models); setCatalogError(null); } })
+      .catch((err) => { if (!cancelled) setCatalogError((err as Error).message); });
+    return () => { cancelled = true; };
+  }, [provider, health?.config.opencodeBaseUrl]);
 
   const loadMemory = useCallback(async () => {
     try {
@@ -474,9 +491,14 @@ export function ModelsTab({ health, onSaved }: { health: Health | null; onSaved:
         externalBaseUrl: externalBaseUrl.trim(),
         externalModel: externalModel.trim(),
         ...(apiKey.trim() ? { externalApiKey: apiKey.trim() } : {}),
+        opencodeBaseUrl: opencodeBaseUrl.trim(),
+        opencodeModel: opencodeModel.trim(),
+        ...(opencodeKey.trim() ? { opencodeApiKey: opencodeKey.trim() } : {}),
       });
       setApiKey('');
-      setNotice(`Saved. New requests go to ${provider === 'external' ? externalBaseUrl : lmStudioBaseUrl}.`);
+      setOpencodeKey('');
+      const target = provider === 'opencode' ? opencodeBaseUrl : provider === 'external' ? externalBaseUrl : lmStudioBaseUrl;
+      setNotice(`Saved. New requests go to ${target}.`);
       await onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -516,9 +538,13 @@ export function ModelsTab({ health, onSaved }: { health: Health | null; onSaved:
         <select
           className="select"
           value={provider}
-          onChange={(event) => setProvider(event.target.value === 'external' ? 'external' : 'lmstudio')}
+          onChange={(event) => {
+            const value = event.target.value;
+            setProvider(value === 'opencode' || value === 'external' ? value : 'lmstudio');
+          }}
         >
           <option value="lmstudio">LM Studio (local)</option>
+          <option value="opencode">OpenCode inference (free models, manual opt-in)</option>
           <option value="external">External OpenAI-compatible API</option>
         </select>
       </div>
@@ -548,6 +574,65 @@ export function ModelsTab({ health, onSaved }: { health: Health | null; onSaved:
               placeholder="local-model"
               onChange={(event) => setModel(event.target.value)}
             />
+          </div>
+        </>
+      ) : provider === 'opencode' ? (
+        <>
+          <label className="muted tiny" htmlFor="opencode-url">
+            Inference base URL
+          </label>
+          <div className="field">
+            <input
+              id="opencode-url"
+              className="input"
+              value={opencodeBaseUrl}
+              placeholder="https://opencode.ai/inference/openai/v1"
+              onChange={(event) => setOpencodeBaseUrl(event.target.value)}
+            />
+          </div>
+          <label className="muted tiny" htmlFor="opencode-model">
+            Model
+          </label>
+          <div className="field">
+            {openCodeModels.length ? (
+              <select
+                id="opencode-model"
+                className="select"
+                value={opencodeModel}
+                onChange={(event) => setOpencodeModel(event.target.value)}
+              >
+                {openCodeModels.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.free ? 'free · ' : ''}{entry.name} ({entry.id})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id="opencode-model"
+                className="input"
+                value={opencodeModel}
+                placeholder="mimo-v2.6-flash-free"
+                onChange={(event) => setOpencodeModel(event.target.value)}
+              />
+            )}
+          </div>
+          {catalogError && <div className="hint tiny">Model catalog unavailable: {catalogError}. You can type a model id.</div>}
+          <label className="muted tiny" htmlFor="opencode-key">
+            API key {health?.config.hasOpenCodeApiKey ? '(stored — leave blank to keep it)' : '(optional)'}
+          </label>
+          <div className="field">
+            <input
+              id="opencode-key"
+              className="input"
+              type="password"
+              value={opencodeKey}
+              placeholder={health?.config.hasOpenCodeApiKey ? '••••••••' : 'OpenCode Console / Go key'}
+              onChange={(event) => setOpencodeKey(event.target.value)}
+            />
+          </div>
+          <div className="hint tiny">
+            Selected manually, so local runs stay the default. Free models are app-only for external clients; add a key or switch endpoints if you see a 403/429.
           </div>
         </>
       ) : (

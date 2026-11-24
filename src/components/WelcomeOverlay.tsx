@@ -19,6 +19,9 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
   const [externalUrl, setExternalUrl] = useState('https://api.openai.com/v1');
   const [externalModel, setExternalModel] = useState('gpt-4o-mini');
   const [apiKey, setApiKey] = useState('');
+  const [opencodeUrl, setOpencodeUrl] = useState('https://opencode.ai/inference/openai/v1');
+  const [opencodeModel, setOpencodeModel] = useState('mimo-v2.6-flash-free');
+  const [opencodeKey, setOpencodeKey] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,15 +48,21 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
     setSaving(true);
     setError(null);
     try {
-      await api.updateConfig({
-        provider,
-        ...(provider === 'lmstudio'
-          ? { lmStudioBaseUrl: lmStudioUrl.trim() }
+      const remote =
+        provider === 'opencode'
+          ? {
+              opencodeBaseUrl: opencodeUrl.trim(),
+              opencodeModel: opencodeModel.trim(),
+              ...(opencodeKey.trim() ? { opencodeApiKey: opencodeKey.trim() } : {}),
+            }
           : {
               externalBaseUrl: externalUrl.trim(),
               externalModel: externalModel.trim(),
               ...(apiKey.trim() ? { externalApiKey: apiKey.trim() } : {}),
-            }),
+            };
+      await api.updateConfig({
+        provider,
+        ...(provider === 'lmstudio' ? { lmStudioBaseUrl: lmStudioUrl.trim() } : remote),
       });
       setStep('done');
     } catch (err) {
@@ -117,7 +126,7 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
         {step === 'welcome' && (
           <>
             <p className="ui-welcome-lead">
-              Specify what you want, then let the agent build it. Everything runs against your own model — no cloud, no telemetry.
+              Specify what you want, then let the agent build it. Local by default; hosted models are opt-in only.
             </p>
             <div className="ui-feature-grid">
               {[
@@ -136,7 +145,7 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
               ))}
             </div>
             <div className="ui-welcome-footer">
-              <span className="ui-muted small">Works with LM Studio or any OpenAI-compatible API.</span>
+              <span className="ui-muted small">LM Studio, OpenCode, or any OpenAI-compatible API.</span>
               <button type="button" className="ui-btn primary" onClick={() => setStep('provider')}>
                 Get started <Icon name="arrowRight" size={14} />
               </button>
@@ -161,6 +170,16 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
               </button>
               <button
                 type="button"
+                className={`ui-provider-card${provider === 'opencode' ? ' selected' : ''}`}
+                onClick={() => setProvider('opencode')}
+              >
+                <Icon name="sparkles" size={20} />
+                <strong>OpenCode inference</strong>
+                <span>Free and paid hosted models</span>
+                <small>Manual opt-in; add a key if free models are limited</small>
+              </button>
+              <button
+                type="button"
                 className={`ui-provider-card${provider === 'external' ? ' selected' : ''}`}
                 onClick={() => setProvider('external')}
               >
@@ -177,6 +196,16 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
                   <label htmlFor="w-lm-url">LM Studio base URL</label>
                   <input id="w-lm-url" className="ui-input" value={lmStudioUrl} onChange={(event) => setLmStudioUrl(event.target.value)} />
                   <div className="ui-hint">Start LM Studio, load a model, then click ▶ to start the local server.</div>
+                </>
+              ) : provider === 'opencode' ? (
+                <>
+                  <label htmlFor="w-op-url">OpenCode inference URL</label>
+                  <input id="w-op-url" className="ui-input" value={opencodeUrl} onChange={(event) => setOpencodeUrl(event.target.value)} />
+                  <label htmlFor="w-op-model">Model</label>
+                  <input id="w-op-model" className="ui-input" value={opencodeModel} onChange={(event) => setOpencodeModel(event.target.value)} />
+                  <label htmlFor="w-op-key">API key (optional)</label>
+                  <input id="w-op-key" className="ui-input" type="password" value={opencodeKey} onChange={(event) => setOpencodeKey(event.target.value)} placeholder="OpenCode Console / Go key" />
+                  <div className="ui-hint">Selected only when you choose it. Free models may require a key outside the OpenCode app.</div>
                 </>
               ) : (
                 <>
@@ -208,7 +237,9 @@ export default function WelcomeOverlay({ health, onDone, onWorkspaceChanged }: W
             <p className="ui-muted small">
               {provider === 'lmstudio'
                 ? 'Make sure LM Studio is running with a model loaded. The status indicator shows the connection.'
-                : 'Your key is stored only in .anneal/config.json on this machine.'}
+                : provider === 'opencode'
+                  ? 'OpenCode is selected manually. Change the model any time in Models.'
+                  : 'Your key is stored only in .anneal/config.json on this machine.'}
             </p>
             <div className="ui-tip-list">
               <div><kbd className="ui-kbd">⌘P</kbd><span>Open any file instantly</span></div>
