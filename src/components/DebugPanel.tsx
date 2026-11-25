@@ -4,6 +4,7 @@ import { api, type DebugState } from '../lib/api';
 interface DebugPanelProps {
   activePath: string | null;
   breakpoints: Array<{ path: string; line: number }>;
+  refreshKey?: number;
   onToggleBreakpoint: (path: string, line: number) => void;
   onClearBreakpoints: () => void;
   onOpenFile: (path: string, line: number) => void;
@@ -14,6 +15,7 @@ const LIVE: DebugState['status'][] = ['starting', 'paused', 'running'];
 export default function DebugPanel({
   activePath,
   breakpoints,
+  refreshKey = 0,
   onToggleBreakpoint,
   onClearBreakpoints,
   onOpenFile,
@@ -31,7 +33,7 @@ export default function DebugPanel({
 
   useEffect(() => {
     void api.debugState().then(setState).catch(() => undefined);
-  }, []);
+  }, [refreshKey]);
 
   const live = state ? LIVE.includes(state.status) : false;
 
@@ -91,7 +93,7 @@ export default function DebugPanel({
       </div>
 
       <div className="debug-toolbar">
-        <button className="btn small" disabled={busy || !script} onClick={() => void start()}>
+        <button className="btn small" disabled={busy || !script} title="Start debugging (F5)" onClick={() => void start()}>
           Debug
         </button>
         <button className="btn ghost small" disabled={busy || !live} onClick={() => void stop()}>
@@ -107,13 +109,13 @@ export default function DebugPanel({
         <button className="btn ghost small" disabled={!live || status === 'paused'} onClick={() => void act('pause')} title="Pause">
           ❚❚
         </button>
-        <button className="btn ghost small" disabled={status !== 'paused'} onClick={() => void act('stepOver')} title="Step over (F8)">
+        <button className="btn ghost small" disabled={status !== 'paused'} onClick={() => void act('stepOver')} title="Step over (F10)">
           ⤼ over
         </button>
-        <button className="btn ghost small" disabled={status !== 'paused'} onClick={() => void act('stepInto')} title="Step into (F7)">
+        <button className="btn ghost small" disabled={status !== 'paused'} onClick={() => void act('stepInto')} title="Step into (F11)">
           ⤓ into
         </button>
-        <button className="btn ghost small" disabled={status !== 'paused'} onClick={() => void act('stepOut')} title="Step out (Shift+F8)">
+        <button className="btn ghost small" disabled={status !== 'paused'} onClick={() => void act('stepOut')} title="Step out (Shift+F11)">
           ⤒ out
         </button>
       </div>

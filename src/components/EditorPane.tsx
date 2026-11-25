@@ -20,6 +20,7 @@ interface EditorPaneProps {
   onChange: (path: string, content: string) => void;
   onSave: () => void;
   onToggleBreakpoint: (path: string, line: number) => void;
+  onStartDebug: (path: string) => void;
   onAttachFile: (path: string) => void;
   onInlineEdit: () => void;
   onQuickOpen: () => void;
@@ -50,6 +51,7 @@ export default function EditorPane({
   onChange,
   onSave,
   onToggleBreakpoint,
+  onStartDebug,
   onAttachFile,
   onInlineEdit,
   onQuickOpen,
@@ -159,6 +161,15 @@ export default function EditorPane({
               </button>
               <button type="button" className="ui-icon-button" title="Inline edit selection (Ctrl/Cmd+K)" onClick={onInlineEdit}>
                 <Icon name="sparkles" size={14} />
+              </button>
+              <button
+                type="button"
+                className="ui-icon-button"
+                title="Debug current file (F5)"
+                aria-label="Debug current file"
+                onClick={() => onStartDebug(active.path)}
+              >
+                <Icon name="play" size={14} />
               </button>
               <button
                 type="button"

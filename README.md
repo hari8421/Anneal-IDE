@@ -41,7 +41,7 @@ OpenAI-compatible endpoint.
 | Context budgeting, history compaction, retrieval | ✅ | `server/context/*` |
 | Agent memory: pinned facts + run journal | ✅ | `server/memory/*` |
 | Desktop executables (Linux, macOS, Windows) | ✅ | `scripts/build-desktop.mjs` |
-| Debugger: breakpoints, stepping, locals, evaluate | ✅ | `server/debug/session.ts`, `src/components/DebugPanel.tsx` |
+| Debugger: debug current file, breakpoints, stepping, locals, evaluate | ✅ | `server/debug/session.ts`, `src/components/DebugPanel.tsx`, `src/components/EditorPane.tsx` |
 | Peek definition/usages, hover, outline, diagnostics | ✅ | `src/editor/intel.ts` (Monaco TS service) |
 | Autopilot vs supervised tool approval | ✅ | `server/agent/loop.ts` |
 | Quick open (Ctrl/Cmd+P), per-file editor state, unsaved-close guard | ✅ | `src/components/QuickOpen.tsx`, `src/App.tsx` |
@@ -261,7 +261,8 @@ file) and reports `truncated` when it stops early.
 The **Debug** tab runs a real Node debugger over the inspector protocol:
 
 - click the gutter (or press F9) to toggle a breakpoint; breakpoints survive reloads
-- Debug/Stop, continue, pause, step over / into / out
+- start the active file with **Debug current file** in the editor tab actions, the command palette, or F5
+- Debug/Stop, continue (F5), pause, step over (F10) / into (F11) / out (Shift+F11)
 - call stack with clickable frames, per-scope locals, console + stdout/stderr
 - evaluate any expression in the paused frame
 
@@ -345,6 +346,8 @@ composer to filter files by name.
 | Ctrl/Cmd+S | Save the active file |
 | Ctrl/Cmd+Enter | Run the agent on the current goal |
 | F9 | Toggle a breakpoint on the current line |
+| F5 | Start debugging the active file, or continue when paused |
+| F10 / F11 / Shift+F11 | Step over / into / out while paused |
 | F12 / Alt+F12 / Shift+F12 | Go to / peek definition, find usages |
 | Ctrl/Cmd+Shift+O | File outline |
 

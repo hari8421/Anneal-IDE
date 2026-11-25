@@ -139,6 +139,7 @@ export default function App() {
       return [];
     }
   });
+  const [debugRefresh, setDebugRefresh] = useState(0);
   const [reveal, setReveal] = useState<{ path: string; line: number } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -314,8 +315,8 @@ export default function App() {
     [openFiles],
   );
 
-  const saveActive = useCallback(async () => {
-    const active = openFiles.find((file) => file.path === activePath);
+  const saveActive = useCallback(async (path: string | null = activePath) => {
+    const active = openFiles.find((file) => file.path === path);
     if (!active || active.content === active.saved) return;
     try {
       await api.saveFile(active.path, active.content);
@@ -352,6 +353,45 @@ export default function App() {
         : [...prev, { path, line }].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line),
     );
   }, []);
+
+  const showDebugger = useCallback(() => {
+    setBottomOpen(true);
+    setBottomTab('debug');
+  }, []);
+
+  const startDebugFromCode = useCallback(async (path: string | null = activePath) => {
+    if (!path) {
+      setError('Open a file before starting a debug session.');
+      showDebugger();
+      return;
+    }
+    try {
+      await saveActive(path);
+      await api.debugStart(path, breakpoints);
+      setError(null);
+      setDebugRefresh((value) => value + 1);
+      showDebugger();
+    } catch (err) {
+      setError((err as Error).message);
+      showDebugger();
+    }
+  }, [activePath, breakpoints, saveActive, showDebugger]);
+
+  const debugKeyAction = useCallback(async (key: string, shiftKey: boolean) => {
+    try {
+      const state = await api.debugState();
+      if (key === 'F5') {
+        if (state.status === 'paused') await api.debugAction('continue');
+        else await startDebugFromCode();
+      } else if (state.status === 'paused') {
+        if (key === 'F10') await api.debugAction('stepOver');
+        else if (key === 'F11') await api.debugAction(shiftKey ? 'stepOut' : 'stepInto');
+      }
+      setDebugRefresh((value) => value + 1);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, [startDebugFromCode]);
 
   const broadcast = useCallback((event: string, data: Record<string, unknown>) => {
     const id = activeChatIdRef.current;
@@ -667,6 +707,9 @@ export default function App() {
       } else if (modifier && event.key === 'Enter') {
         event.preventDefault();
         submitRef.current?.();
+      } else if (!modifier && (event.key === 'F5' || event.key === 'F10' || event.key === 'F11')) {
+        event.preventDefault();
+        void debugKeyAction(event.key, event.shiftKey);
       } else if (!modifier && event.key === '?') {
         const tag = (event.target as HTMLElement).tagName.toLowerCase();
         if (tag !== 'input' && tag !== 'textarea') {
@@ -681,7 +724,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [saveActive, triggerInlineEdit]);
+  }, [debugKeyAction, saveActive, triggerInlineEdit]);
 
   const commands = useMemo<Command[]>(() => {
     const show = (key: ActivityKey) => { setActivity(key); setSidebarOpen(true); };
@@ -696,7 +739,8 @@ export default function App() {
       { id: 'toggle-bottom', title: 'Toggle terminal / debug panel', category: 'View', keys: '⌘`', icon: 'panelBottom', run: () => setBottomOpen((v) => !v) },
       { id: 'terminal', title: 'Focus terminal', category: 'View', icon: 'terminal', run: () => { setBottomOpen(true); setBottomTab('terminal'); } },
       { id: 'output', title: 'Focus agent log', category: 'View', icon: 'output', run: () => { setBottomOpen(true); setBottomTab('output'); } },
-      { id: 'debugger', title: 'Focus debugger', category: 'View', icon: 'debug', run: () => { setBottomOpen(true); setBottomTab('debug'); } },
+      { id: 'debugger', title: 'Focus debugger', category: 'View', icon: 'debug', run: showDebugger },
+      { id: 'debug-current-file', title: 'Debug current file', category: 'Debug', keys: 'F5', icon: 'play', run: () => void startDebugFromCode() },
       { id: 'shortcuts', title: 'Keyboard shortcuts', category: 'Help', keys: '?', icon: 'keyboard', run: () => setShowShortcuts(true) },
       { id: 'ask', title: 'Ask mode — answer without edits', category: 'Agent', icon: 'lightbulb', run: () => { setChatOpen(true); changeMode('ask'); } },
       { id: 'agent', title: 'Agent mode — plan and edit', category: 'Agent', icon: 'zap', run: () => { setChatOpen(true); changeMode('agent'); } },
@@ -710,7 +754,7 @@ export default function App() {
         id: `view-${key}`, title: `View: ${PANEL_TITLES[key].title}`, category: 'Panels', icon: PANEL_TITLES[key].icon, run: () => show(key),
       })),
     ];
-  }, [activePath, cancelRun, changeAutonomy, changeMode, changeSelfHeal, chatMode, closeFile, health?.config.selfHeal, saveActive, triggerInlineEdit]);
+  }, [activePath, cancelRun, changeAutonomy, changeMode, changeSelfHeal, chatMode, closeFile, health?.config.selfHeal, saveActive, showDebugger, startDebugFromCode, triggerInlineEdit]);
 
   const workspaceFiles = useMemo(() => flattenFiles(tree), [tree]);
   const dirtyPaths = openFiles.filter((file) => file.content !== file.saved).map((file) => file.path);
@@ -736,6 +780,7 @@ export default function App() {
   const debugProps = {
     activePath,
     breakpoints,
+    refreshKey: debugRefresh,
     onToggleBreakpoint: toggleBreakpoint,
     onClearBreakpoints: () => setBreakpoints([]),
     onOpenFile: (path: string, line: number) => { void openFile(path); setReveal({ path, line }); },
@@ -900,6 +945,7 @@ export default function App() {
             breakpoints={breakpoints}
             reveal={reveal}
             onToggleBreakpoint={toggleBreakpoint}
+            onStartDebug={(path) => void startDebugFromCode(path)}
             onAttachFile={(path) => attachFiles([path])}
             onSelect={setActivePath}
             onClose={closeFile}
