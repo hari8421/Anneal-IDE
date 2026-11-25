@@ -41,7 +41,7 @@ interface ChatPanelProps {
 }
 
 const MODES: Array<{ key: ChatMode; label: string; icon: IconName; hint: string }> = [
-  { key: 'ask', label: 'Ask', icon: 'lightbulb', hint: 'Answer questions without touching files.' },
+  { key: 'ask', label: 'Ask', icon: 'lightbulb', hint: 'Answer codebase questions in one pass, without touching files.' },
   { key: 'agent', label: 'Agent', icon: 'zap', hint: 'Plan, edit files and run tools until the goal is done.' },
   { key: 'spec', label: 'Spec', icon: 'specs', hint: 'Turn a feature idea into requirements, design and tasks.' },
 ];

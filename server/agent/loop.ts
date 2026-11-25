@@ -59,6 +59,8 @@ export interface AgentRunOptions {
 }
 
 export interface AgentResult {
+  /** `explain` results are read-only one-pass answers, not journaled runs. */
+  kind?: 'agent' | 'explain';
   status: AgentStatus;
   runId: string;
   steps: number;

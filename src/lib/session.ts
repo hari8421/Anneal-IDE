@@ -151,7 +151,9 @@ export function applyEvent(state: SessionState, event: string, data: Record<stri
             kind: 'notice',
             text:
               result.status === 'completed'
-                ? `Completed in ${result.steps} step(s), ${result.toolCalls} tool call(s).`
+                ? result.kind === 'explain'
+                  ? 'Explained from workspace context in one pass (0 tools).'
+                  : `Completed in ${result.steps} step(s), ${result.toolCalls} tool call(s).`
                 : `${result.status.toUpperCase()}: ${result.message}`,
             status: result.status === 'completed' ? 'ok' : result.status === 'failed' ? 'error' : 'running',
           },

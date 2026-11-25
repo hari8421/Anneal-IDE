@@ -350,6 +350,27 @@ info, the file outline and inline diagnostics — the peek widget included — f
 (600 files, 3 MB, 400 KB per file, `truncated` flag) keep a large repository from turning a
 keystroke into a 200 MB download; other languages keep editing without navigation.
 
+### 3.16 One-pass codebase explanations
+
+Asking "explain the codebase" used to enter the general tool loop: one step per
+`list_files`/`read_file`/`search` call, so 54 steps could pass without an answer.
+`server/context/explain.ts` now gathers a compact context up front — a bounded
+workspace map, conventional entry points (`README.md`, `package.json`, `main.ts`,
+`index.ts`, …), files matching the question via the existing lexical retriever,
+and explicit attachments — capped at 12 files × 6 KB each. `server/service.ts`
+then makes exactly one streamed `client.chat` call with an explanation-specific
+system prompt and no tools, and returns a non-resumable `kind: 'explain'` result
+(1 step, 0 tool calls).
+
+Routing is deliberately conservative: `isExplanationGoal()` only matches a
+limited set of read-only question prefixes ("explain", "how does", "what does",
+"give me a … overview", …), and rejects long goals plus any follow-up action
+("explain … and add tests"). Anything with a mutation verb keeps the full agent
+loop and its step budget. Ask mode gets the same workspace context when no
+files are attached, so a grounded answer no longer requires manual attachments.
+Ask uses a general context-aware system prompt (not the explanation template), so ordinary
+questions still get direct answers. Memory, steering and skills stay pinned in both paths.
+
 ---
 
 ## 4. Failure matrix (self-heal contract)
@@ -408,6 +429,7 @@ model.
 | Skills | `skills.test.ts` | frontmatter parsing, nested SKILL.md discovery, auto-only injection, id sanitisation |
 | Language service | `intel.test.ts` | source filters, ignored dirs, file/size caps, truncation |
 | Debugger | `debug.test.ts` | breakpoint pause, locals, in-frame evaluation, stepping, missing/escaping script rejection |
+| One-pass explanations | `explain.test.ts`, `provider-memory.e2e.test.ts` | read-only routing guard, bounded context, one tool-free streamed call over HTTP |
 
 ---
 

@@ -172,7 +172,7 @@ afterAll(async () => {
 
 describe('external provider + agent memory over real HTTP', () => {
   it('routes completions to the external endpoint with the configured key and model', async () => {
-    const stream = await runGoal('Describe this project.');
+    const stream = await runGoal('Inventory this project and list its files.');
     expect(stream).toContain('result');
 
     const request = lastRequest();
@@ -219,6 +219,19 @@ describe('external provider + agent memory over real HTTP', () => {
     mode = 'text';
     await runGoal('Say hello.');
     expect(promptText(lastRequest())).toContain('test command');
+  });
+
+  it('answers an explanation goal in one tool-free call over real HTTP', async () => {
+    const before = recorded.length;
+    const stream = await runGoal('Explain the codebase.');
+
+    expect(stream).toContain('event: assistant.delta');
+    expect(stream).toContain('"kind":"explain"');
+    expect(stream).toContain('"steps":1');
+    expect(recorded.length - before).toBe(1);
+    expect(lastRequest().tools).toEqual([]);
+    expect(promptText(lastRequest())).toContain('Workspace map');
+    expect(promptText(lastRequest())).toContain('src/app.ts');
   });
 
   it('forgets a fact and stops pinning it', async () => {

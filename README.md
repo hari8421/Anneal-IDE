@@ -29,6 +29,7 @@ OpenAI-compatible endpoint.
 | External OpenAI-compatible APIs (optional) | ✅ | `server/config.ts`, `server/llm/client.ts` |
 | Skills: reusable `SKILL.md` workflow packs | ✅ | `server/skills/skills.ts`, `src/components/SkillsTab.tsx` |
 | Streaming chat + streaming agent events (SSE) | ✅ | `server/llm/client.ts`, `server/index.ts` |
+| One-pass codebase explanations (no tool loop) | ✅ | `server/context/explain.ts`, `server/service.ts` |
 | Attach workspace files in Ask / Agent / Spec | ✅ | `src/components/AttachmentPicker.tsx`, `src/App.tsx` |
 | Tool use: read, write, patch, list, search, run | ✅ | `server/tools/index.ts` |
 | Resumable runs after a crash or cancel | ✅ | `server/agent/journal.ts`, `server/agent/loop.ts` |
@@ -203,6 +204,19 @@ model id if the catalog is unreachable. Free-tier chat models are restricted to 
 from another client you may get a 403/429. Supply an OpenCode Console/Go key or use a different
 endpoint in that case — the error message says so explicitly. Setting the provider back to
 `lmstudio` restores the local-only behaviour.
+
+### Explaining a codebase quickly
+
+Read-only questions such as “explain the codebase”, “how does the agent loop work?” or “give me a
+codebase overview” no longer enter the tool loop. `server/context/explain.ts` gathers a small
+workspace map, conventional entry points, files matching the question and any attachments in one
+pass, then the model answers in a single streamed call. The result shows **1 step · 0 tools** and
+cannot consume a 24–200 step budget or leave a resumable run behind.
+
+Goals with an action attached (“explain the codebase and add tests”, “fix the parser”) still use the
+full Agent loop. Ask mode is also codebase-aware: without attachments it sends the same compact
+context, so questions get grounded answers in one call instead of a list of files to open by hand.
+Memory, steering and skills remain pinned in both paths.
 
 ### Creating skills
 

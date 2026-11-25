@@ -475,8 +475,11 @@ export default function App() {
         askMessages: [...chat.askMessages, { role: 'user', text }, { role: 'assistant', text: '' }],
       }));
 
-      // Ask has no tool loop, so attached files must be read here and sent with the prompt.
+      // Ask has no tool loop. With attachments, read them here; otherwise let
+      // the server add a compact workspace map so codebase questions get a
+      // grounded answer in one call.
       const attachments = await attachmentPrompt(files);
+      const contextual = !attachments;
       const prompt = attachments ? `${text}\n\n${attachments}` : text;
       updateChat(id, (chat) => ({
         ...chat,
@@ -499,7 +502,7 @@ export default function App() {
             index === chat.askMessages.length - 1 ? { ...message, text: answer } : message,
           ),
         }));
-      }, controller.signal).catch((err: Error) => {
+      }, controller.signal, contextual).catch((err: Error) => {
         if (err.name !== 'AbortError') setError(err.message);
       }).finally(() => {
         abortRef.current = null;

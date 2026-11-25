@@ -515,6 +515,7 @@ function registerRoutes(): void {
     try {
       const result = await service.chatStream({
         messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+        contextual: body.contextual === true,
         signal: controller.signal,
         onDelta: (chunk) => sse.send('delta', { text: chunk }),
       });

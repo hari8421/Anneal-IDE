@@ -78,6 +78,27 @@ describe('session reducer', () => {
     expect(state.entries.some((entry) => entry.text === 'boom')).toBe(true);
   });
 
+  it('labels explain results as one pass instead of a step-count summary', () => {
+    const state = fold([
+      [
+        'result',
+        {
+          kind: 'explain',
+          status: 'completed',
+          runId: 'explain-1',
+          steps: 1,
+          message: 'Explained from workspace context in one pass.',
+          resumable: false,
+          toolCalls: 0,
+          usage: { promptTokens: 10, completionTokens: 5 },
+        },
+      ],
+    ]);
+
+    const notice = state.entries.find((entry) => entry.kind === 'notice');
+    expect(notice?.text).toBe('Explained from workspace context in one pass (0 tools).');
+  });
+
   it('turns tool-emitted progress events into notices instead of fake tools', () => {
     const state = fold([['tool.result', { type: 'tool.result', step: 1, data: { type: 'file.written', path: 'src/a.ts' } }]]);
 

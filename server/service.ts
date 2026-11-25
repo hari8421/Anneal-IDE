@@ -3,8 +3,17 @@ import path from 'node:path';
 import { CheckpointStore } from './agent/checkpoints';
 import { RunJournal, listRuns, newRunId, type RunSummary } from './agent/journal';
 import { runAgent, type AgentEvent, type AgentResult } from './agent/loop';
-import { AGENT_SYSTEM_PROMPT, SUMMARY_SYSTEM_PROMPT, TASK_AGENT_PROMPT } from './agent/prompts';
-import type { ContextSection } from './context/builder';
+import {
+  AGENT_SYSTEM_PROMPT,
+  CONTEXT_SYSTEM_PROMPT,
+  EXPLAIN_SYSTEM_PROMPT,
+  SUMMARY_SYSTEM_PROMPT,
+  TASK_AGENT_PROMPT,
+  contextUserPrompt,
+  explainUserPrompt,
+} from './agent/prompts';
+import { buildContext, renderSections, type ContextSection } from './context/builder';
+import { explainSections, isExplanationGoal } from './context/explain';
 import { retrieveFiles } from './context/retrieval';
 import { annealPaths, loadConfig, resolveEndpoint, type Autonomy, type AnnealConfig } from './config';
 import { HookEngine, loadHooks, type HookDefinition, type HookEvent, type HookRunResult } from './hooks/hooks';
@@ -37,6 +46,8 @@ export interface RunRequest {
 
 export interface ChatStreamRequest {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  /** Add a compact workspace map and relevant files for read-only questions. */
+  contextual?: boolean;
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
 }
@@ -59,9 +70,9 @@ export class AnnealService {
   private mcpClients: McpClient[] = [];
   private mcpToolList: McpTool[] = [];
 
-  constructor(config: AnnealConfig) {
+  constructor(config: AnnealConfig, client?: LMStudioClient) {
     this.config = config;
-    this.client = this.createClient();
+    this.client = client ?? this.createClient();
     this.memory = new AgentMemory(path.join(annealPaths(config.workspaceRoot).anneal, 'memory'));
     this.tools = createDefaultTools();
     const paths = annealPaths(config.workspaceRoot);
@@ -188,19 +199,95 @@ export class AnnealService {
   }
 
   async chatStream(request: ChatStreamRequest): Promise<{ content: string; model: string }> {
+    let messages = request.messages as ChatMessage[];
+    if (request.contextual) {
+      const lastUser = messages.map((message, index) => ({ message, index })).reverse()
+        .find(({ message }) => message.role === 'user');
+      if (lastUser?.message.content.trim()) {
+        const sections = [
+          ...(await this.baselineSections()),
+          ...(await explainSections(this.config.workspaceRoot, lastUser.message.content, [])),
+        ];
+        const built = buildContext({
+          budgetTokens: this.config.contextBudgetTokens,
+          reserveOutputTokens: this.config.reserveOutputTokens,
+          sections,
+          historyShare: 0,
+        });
+        messages = messages.map((message, index) =>
+          index === lastUser.index
+            ? { ...message, content: contextUserPrompt(message.content, renderSections(built.sections)) }
+            : message,
+        );
+      }
+      if (!messages.some((message) => message.role === 'system')) {
+        messages = [{ role: 'system', content: CONTEXT_SYSTEM_PROMPT }, ...messages];
+      }
+    }
     const result = await this.client.chat(
-      { messages: request.messages as ChatMessage[], stream: true, signal: request.signal },
+      { messages, stream: true, signal: request.signal },
       request.onDelta,
     );
     return { content: result.content, model: result.model ?? this.config.model };
   }
 
-  private async buildSections(
-    files: string[] = [],
-    specId?: string,
-    taskId?: string,
-    query?: string,
-  ): Promise<ContextSection[]> {
+  /**
+   * Answer an explanatory question in one call. No tool loop, no journal, no
+   * edits: the context is gathered up front from the workspace map and a small
+   * set of relevant files, so a question cannot consume 50 agent steps.
+   */
+  async explain(request: RunRequest): Promise<AgentResult> {
+    const question = request.goal.trim();
+    const runId = `explain-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const sections = [
+      ...(await this.baselineSections(request.files ?? [])),
+      ...(await explainSections(this.config.workspaceRoot, question, request.files ?? [])),
+    ];
+    const built = buildContext({
+      budgetTokens: this.config.contextBudgetTokens,
+      reserveOutputTokens: this.config.reserveOutputTokens,
+      sections,
+      historyShare: 0,
+    });
+    request.onEvent?.({
+      type: 'context',
+      runId,
+      data: {
+        totalTokens: built.totalTokens,
+        budgetTokens: built.budgetTokens,
+        dropped: built.dropped.map((section) => section.id),
+        truncated: built.truncated.map((section) => section.id),
+      },
+    });
+
+    const result = await this.client.chat(
+      {
+        messages: [
+          { role: 'system', content: EXPLAIN_SYSTEM_PROMPT },
+          { role: 'user', content: explainUserPrompt(question, renderSections(built.sections)) },
+        ],
+        stream: true,
+        signal: request.signal,
+      },
+      (chunk) => request.onEvent?.({ type: 'assistant.delta', runId, data: { text: chunk } }),
+    );
+    const content = result.content;
+    request.onEvent?.({ type: 'assistant.message', runId, data: { content, final: true } });
+    const answer: AgentResult = {
+      kind: 'explain',
+      status: 'completed',
+      runId,
+      steps: 1,
+      message: 'Explained from workspace context in one pass.',
+      resumable: false,
+      toolCalls: 0,
+      usage: result.usage ?? { promptTokens: 0, completionTokens: 0 },
+    };
+    return answer;
+  }
+
+  /** Memory, steering and skills apply to both agent runs and explanations. */
+  private async baselineSections(files: string[] = []): Promise<ContextSection[]> {
     const sections: ContextSection[] = [];
     // Pinned memory goes first and is never dropped: it is the agent's
     // cross-run knowledge, and it is capped at maxCoreLines by the store.
@@ -219,6 +306,16 @@ export class AnnealService {
     sections.push(...steeringSections(selectSteering(steering, files)));
     const skills = await loadSkills(annealPaths(this.config.workspaceRoot).skills);
     sections.push(...skillSections(skills));
+    return sections;
+  }
+
+  private async buildSections(
+    files: string[] = [],
+    specId?: string,
+    taskId?: string,
+    query?: string,
+  ): Promise<ContextSection[]> {
+    const sections = await this.baselineSections(files);
 
     if (specId) {
       const spec = await this.specStore.read(specId);
@@ -415,6 +512,11 @@ export class AnnealService {
   }
 
   async run(request: RunRequest): Promise<AgentResult> {
+    // Explanations are read-only: answer from a compact context in one pass
+    // instead of spending the step budget on one tool call per file.
+    if (!request.specId && !request.taskId && isExplanationGoal(request.goal)) {
+      return this.explain(request);
+    }
     const journal = await RunJournal.create(annealPaths(this.config.workspaceRoot).runs, newRunId());
     return this.startRun(request, journal);
   }

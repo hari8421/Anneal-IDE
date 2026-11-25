@@ -152,6 +152,7 @@ export interface HookDefinition {
 }
 
 export interface AgentResult {
+  kind?: 'agent' | 'explain';
   status: 'completed' | 'failed' | 'cancelled' | 'paused';
   runId: string;
   steps: number;
@@ -319,11 +320,12 @@ export const api = {
     messages: Array<{ role: ChatRole; content: string }>,
     onDelta: (text: string) => void,
     signal?: AbortSignal,
+    contextual = false,
   ): Promise<string> => {
     let content = '';
     await stream(
       '/api/chat',
-      { messages },
+      { messages, contextual },
       (event, data) => {
         if (event === 'delta') {
           const chunk = String(data.text ?? '');
