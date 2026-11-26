@@ -127,7 +127,15 @@ function languageFor(file: string): string {
   return map[ext] ?? 'plaintext';
 }
 
-async function listTree(root: string, relative: string, depth: number, maxDepth: number): Promise<unknown[]> {
+const MAX_TREE_NODES = 5000;
+
+async function listTree(
+  root: string,
+  relative: string,
+  depth: number,
+  maxDepth: number,
+  counter: { count: number } = { count: 0 },
+): Promise<unknown[]> {
   const dir = resolveInWorkspace(root, relative);
   let entries;
   try {
@@ -140,14 +148,24 @@ async function listTree(root: string, relative: string, depth: number, maxDepth:
     .filter((entry) => !isIgnoredPath(path.join(relative, entry.name)))
     .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
 
-  for (const entry of sorted.slice(0, 300)) {
+  for (const [index, entry] of sorted.entries()) {
+    if (counter.count >= MAX_TREE_NODES) {
+      nodes.push({
+        name: `… ${sorted.length - index} more entries (tree limit ${MAX_TREE_NODES})`,
+        path: path.join(relative, '…').replace(/^\/+/, ''),
+        type: 'file',
+        truncated: true,
+      });
+      break;
+    }
+    counter.count += 1;
     const childRelative = toRelative(root, path.join(dir, entry.name));
     if (entry.isDirectory()) {
       nodes.push({
         name: entry.name,
         path: childRelative,
         type: 'dir',
-        children: depth < maxDepth ? await listTree(root, childRelative, depth + 1, maxDepth) : undefined,
+        children: depth < maxDepth ? await listTree(root, childRelative, depth + 1, maxDepth, counter) : undefined,
       });
     } else {
       nodes.push({ name: entry.name, path: childRelative, type: 'file' });
@@ -348,8 +366,8 @@ function registerRoutes(): void {
 
   route('GET', '/api/files', async ({ res, url }) => {
     const requested = url.searchParams.get('path') ?? '';
-    const depth = Number(url.searchParams.get('depth') ?? 3);
-    const tree = await listTree(workspaceRoot(), requested, 0, Math.min(6, Math.max(0, depth)));
+    const depth = Number(url.searchParams.get('depth') ?? 64);
+    const tree = await listTree(workspaceRoot(), requested, 0, Math.min(64, Math.max(0, depth)));
     json(res, 200, { root: workspaceRoot(), path: requested, tree });
   });
 

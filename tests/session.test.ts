@@ -39,6 +39,62 @@ describe('session reducer', () => {
     expect(state.entries[0]!.status).toBe('ok');
   });
 
+  it('settles step entries when step.complete arrives', () => {
+    const state = fold([
+      ['step.start', { type: 'step.start', step: 0, data: { total: 3 } }],
+      ['step.start', { type: 'step.start', step: 1, data: { total: 3 } }],
+      ['step.complete', { type: 'step.complete', step: 0, data: { toolCalls: 1 } }],
+      ['step.complete', { type: 'step.complete', step: 1, data: { final: true } }],
+    ]);
+
+    const steps = state.entries.filter((entry) => entry.kind === 'notice' && /^Step /.test(entry.text));
+    expect(steps.map((entry) => entry.status)).toEqual(['ok', 'ok']);
+  });
+
+  it('settles any still-running entries when the result arrives', () => {
+    const state = fold([
+      ['step.start', { type: 'step.start', step: 0, data: { total: 3 } }],
+      [
+        'result',
+        {
+          status: 'completed',
+          runId: 'run-2',
+          steps: 1,
+          message: 'done',
+          resumable: false,
+          toolCalls: 0,
+          usage: { promptTokens: 1, completionTokens: 1 },
+        },
+      ],
+    ]);
+
+    const step = state.entries.find((entry) => entry.kind === 'notice' && /^Step /.test(entry.text));
+    expect(step?.status).toBe('ok');
+  });
+
+  it('settles running steps on run.end and keeps terminal notices out of the spinner state', () => {
+    const state = fold([
+      ['step.start', { type: 'step.start', step: 0, data: { total: 4 } }],
+      ['step.start', { type: 'step.start', step: 1, data: { total: 4 } }],
+      ['run.end', { type: 'run.end', data: { status: 'paused', message: 'Step budget exhausted' } }],
+    ]);
+
+    expect(state.entries.filter((entry) => /^Step /.test(entry.text)).map((entry) => entry.status)).toEqual(['ok', 'ok']);
+    expect(state.entries.every((entry) => entry.status !== 'running')).toBe(true);
+    expect(state.streaming).toBe(false);
+  });
+
+  it('settles the transcript when the user stops a run', () => {
+    const state = fold([
+      ['step.start', { type: 'step.start', step: 0, data: { total: 4 } }],
+      ['cancelled', {}],
+    ]);
+
+    expect(state.streaming).toBe(false);
+    expect(state.entries.every((entry) => entry.status !== 'running')).toBe(true);
+    expect(state.entries.some((entry) => entry.text === 'Run stopped by the user.')).toBe(true);
+  });
+
   it('reads the context meter from the wrapped payload', () => {
     const state = fold([
       [

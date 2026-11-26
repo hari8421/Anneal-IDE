@@ -430,9 +430,11 @@ export default function App() {
       try {
         await stream(url, body, broadcast, controller.signal);
       } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
+        if ((err as Error).name === 'AbortError') {
+          updateChat(id, (chat) => ({ ...chat, session: applyEvent(chat.session, 'cancelled', {}) }));
+        } else {
           const message = (err as Error).message;
-          updateChat(id, (chat) => ({ ...chat, session: { ...chat.session, streaming: false, error: message } }));
+          updateChat(id, (chat) => ({ ...chat, session: applyEvent(chat.session, 'error', { message }) }));
           setError(message);
         }
       } finally {

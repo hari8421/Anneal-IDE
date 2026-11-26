@@ -271,7 +271,18 @@ export class AnnealService {
       },
       (chunk) => request.onEvent?.({ type: 'assistant.delta', runId, data: { text: chunk } }),
     );
-    const content = result.content;
+    const map = built.sections.find((section) => section.id === 'workspace:map')?.content ?? '';
+    const content = result.content.trim() || [
+      'I gathered the workspace context, but the model returned an empty response.',
+      '',
+      'Workspace map:',
+      map.slice(0, 1500) || '(no files found)',
+      '',
+      'Attach a specific file or rephrase the question for a more focused answer.',
+    ].join('\n');
+    if (!result.content.trim()) {
+      request.onEvent?.({ type: 'assistant.delta', runId, data: { text: content } });
+    }
     request.onEvent?.({ type: 'assistant.message', runId, data: { content, final: true } });
     const answer: AgentResult = {
       kind: 'explain',

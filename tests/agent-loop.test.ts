@@ -84,6 +84,7 @@ describe('runAgent', () => {
 
     expect(events.some((event) => event.type === 'assistant.delta')).toBe(true);
     expect(events.some((event) => event.type === 'context')).toBe(true);
+    expect(events.filter((event) => event.type === 'step.complete').map((event) => event.step)).toEqual([0, 1]);
   });
 
   it('resumes a crashed run without replaying completed steps or tools', async () => {
@@ -238,13 +239,17 @@ describe('runAgent', () => {
       textResult('', [{ id: 'e1', type: 'function', function: { name: 'echo', arguments: '{"text":"tick"}' } }]),
     );
 
+    const events: AgentEvent[] = [];
     const result = await runAgent(
-      baseOptions({ client, journal, workspaceRoot, tools: [echoTool], maxSteps: 2 }) as never,
+      baseOptions({ client, journal, workspaceRoot, tools: [echoTool], maxSteps: 2, onEvent: (event: AgentEvent) => events.push(event) }) as never,
     );
 
     expect(result.status).toBe('paused');
     expect(result.steps).toBe(2);
     expect(result.resumable).toBe(true);
+    // A budget pause still leaves a visible answer instead of steps with no reply.
+    expect(events.some((event) => event.type === 'assistant.message' && (event.data as { final?: boolean })?.final)).toBe(true);
+    expect(events.some((event) => event.type === 'run.end')).toBe(true);
   });
 
   it('gives a step-budget pause a fresh budget on resume', async () => {

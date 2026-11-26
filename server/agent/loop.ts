@@ -11,6 +11,7 @@ export type AgentEventType =
   | 'run.end'
   | 'resume'
   | 'step.start'
+  | 'step.complete'
   | 'assistant.delta'
   | 'assistant.message'
   | 'tool.call'
@@ -169,12 +170,22 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
   const resumeSteps = Math.max(1, options.resumeSteps ?? options.maxSteps);
   const stepLimit = isResume ? Math.max(options.maxSteps, startStep + resumeSteps) : options.maxSteps;
   const maxRepairs = options.selfHeal === false ? 0 : options.maxToolRepairs;
+  let finalAnswerEmitted = false;
 
   const finish = async (
     status: AgentStatus,
     message: string,
     extra: { error?: string; resumable?: boolean } = {},
   ): Promise<AgentResult> => {
+    // A run that ends on the step ceiling or an error must still leave an
+    // answer on screen; otherwise the transcript shows steps and no response.
+    if (status !== 'completed' && !finalAnswerEmitted) {
+      emit('assistant.message', undefined, {
+        content: `I stopped before finishing: ${message}`,
+        final: true,
+      });
+      finalAnswerEmitted = true;
+    }
     await journal.append('run.end', { data: { status, message, ...(extra.error ? { error: extra.error } : {}) } });
     emit('run.end', undefined, { status, message, ...(extra.error ? { error: extra.error } : {}) });
     return {
@@ -300,6 +311,8 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
         continue;
       }
       await journal.append('step.complete', { step, key: `${stepKey}:done`, data: { final: true } });
+      emit('step.complete', step, { final: true });
+      finalAnswerEmitted = true;
       emit('assistant.message', step, { content, final: true });
       return finish('completed', content);
     }
@@ -397,6 +410,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
     }
 
     await journal.append('step.complete', { step, key: `${stepKey}:done`, data: { toolCalls: calls.length } });
+    emit('step.complete', step, { toolCalls: calls.length });
 
     if (stepHadSuccess) {
       consecutiveFailures = 0;

@@ -7,7 +7,8 @@ Operating rules:
 - If a tool returns an error, diagnose it and change your approach. Never repeat an identical failing call.
 - Never claim something works without evidence from a tool result.
 - Ask nothing; make reasonable choices and explain them in one line.
-- When the goal is fully met, reply starting with "DONE:" followed by a short summary of what changed and how it was verified.
+- For read-only questions about the workspace, answer the question in your final message; do not reply with only "DONE:".
+- When a change goal is fully met, reply starting with "DONE:" followed by a short summary of what changed and how it was verified.
 - If the goal is genuinely impossible with the available tools, reply starting with "BLOCKED:" and say exactly what is missing.
 
 Style: terse. No preamble, no restating the plan, no markdown headings in chat.`;
@@ -38,7 +39,7 @@ export function explainUserPrompt(question: string, context: string): string {
 }
 
 export function goalDirective(goal: string, step: number, maxSteps: number): string {
-  return `<goal step="${step + 1}" of="${maxSteps}">\n${goal}\n</goal>\nContinue with the goal above. Use tools to inspect and change the workspace.`;
+  return `<goal step="${step + 1}" of="${maxSteps}">\n${goal}\n</goal>\nContinue with the goal above. Use tools as needed; for read-only questions, answer directly when you have enough context.`;
 }
 
 export function stepNudge(step: number, maxSteps: number): string {

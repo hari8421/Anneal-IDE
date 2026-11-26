@@ -83,6 +83,7 @@ export interface FileNode {
   path: string;
   type: 'file' | 'dir';
   children?: FileNode[];
+  truncated?: boolean;
 }
 
 export interface FileContent {
@@ -207,7 +208,10 @@ export const api = {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch),
     }),
-  tree: () => request<{ root: string; tree: FileNode[] }>('/api/files?depth=5'),
+  tree: (path = '', depth = 64) =>
+    request<{ root: string; path: string; tree: FileNode[] }>(
+      `/api/files?depth=${depth}${path ? `&path=${encodeURIComponent(path)}` : ''}`,
+    ),
   readFile: (path: string) => request<FileContent>(`/api/file?path=${encodeURIComponent(path)}`),
   saveFile: (path: string, content: string) =>
     request<{ path: string }>('/api/file', {

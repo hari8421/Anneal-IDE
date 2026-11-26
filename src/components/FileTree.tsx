@@ -28,7 +28,9 @@ function filterNodes(nodes: FileNode[], query: string): FileNode[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return nodes;
   return nodes.flatMap((node) => {
+    if (node.truncated) return [];
     if (node.type === 'file') return node.path.toLowerCase().includes(needle) ? [node] : [];
+    if (node.name.toLowerCase().includes(needle)) return [node];
     const children = filterNodes(node.children ?? [], needle);
     return children.length ? [{ ...node, children }] : [];
   });
@@ -54,7 +56,7 @@ function TreeNode({
   renaming,
   setRenaming,
 }: NodeProps) {
-  const [open, setOpen] = useState(depth < 2);
+  const [open, setOpen] = useState(depth < 64);
   const [draft, setDraft] = useState(node.name);
   const isDir = node.type === 'dir';
   const isActive = activePath === node.path;
@@ -66,6 +68,16 @@ function TreeNode({
     if (next && next !== node.name) onRename(node.path, next);
     setRenaming(null);
   };
+
+  if (node.truncated) {
+    return (
+      <div className="ui-tree-node">
+        <div className="ui-tree-row muted small" style={{ paddingLeft: 6 + depth * 13 }} title={node.path}>
+          <span className="ui-tree-name">{node.name}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="ui-tree-node">

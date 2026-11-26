@@ -143,6 +143,26 @@ describe('HTTP API', () => {
     expect(after.skills.some((skill) => skill.id === 'release-check')).toBe(false);
   });
 
+  it('returns the complete nested file tree', async () => {
+    await writeFiles(workspace, {
+      'deep/one/two/three/four/leaf.ts': 'export const leaf = 1;\n',
+      'deep/one/two/sibling.md': '# sibling\n',
+    });
+
+    const body = (await (await fetch(`${baseUrl}/api/files`)).json()) as {
+      tree: Array<{ name: string; children?: Array<{ name: string; children?: unknown[] }> }>;
+    };
+    const walk = (nodes: Array<{ name: string; children?: unknown[] }>, parts: string[]): boolean => {
+      const node = nodes.find((entry) => entry.name === parts[0]);
+      if (!node) return false;
+      if (parts.length === 1) return true;
+      return walk((node.children ?? []) as Array<{ name: string; children?: unknown[] }>, parts.slice(1));
+    };
+
+    expect(walk(body.tree, ['deep', 'one', 'two', 'three', 'four', 'leaf.ts'])).toBe(true);
+    expect(walk(body.tree, ['deep', 'one', 'two', 'sibling.md'])).toBe(true);
+  });
+
   it('lists, reads, writes and deletes workspace files', async () => {
     const tree = (await (await fetch(`${baseUrl}/api/files`)).json()) as { tree: Array<{ name: string }> };
     expect(tree.tree.some((node) => node.name === 'src')).toBe(true);

@@ -40,6 +40,15 @@ const preview = (value: unknown, max = 1800): string => {
   return text.length > max ? `${text.slice(0, max)}\n…` : text;
 };
 
+/** Terminal events must not leave spinner rows behind. */
+function settleRunning(state: SessionState, status: LogEntry['status'] = 'ok'): SessionState {
+  if (!state.entries.some((entry) => entry.status === 'running')) return state;
+  return {
+    ...state,
+    entries: state.entries.map((entry) => (entry.status === 'running' ? { ...entry, status } : entry)),
+  };
+}
+
 /**
  * Fold one SSE event into the session transcript.
  *
@@ -58,9 +67,23 @@ export function applyEvent(state: SessionState, event: string, data: Record<stri
     case 'run.start':
       return { ...state, streaming: true, runId: typeof data.runId === 'string' ? data.runId : state.runId };
     case 'resume':
-      return withEntry({ ...state, streaming: true }, { kind: 'notice', text: 'Resumed from the run journal.', status: 'ok' });
+      return withEntry(settleRunning({ ...state, streaming: true }), { kind: 'notice', text: 'Resumed from the run journal.', status: 'ok' });
     case 'step.start':
       return withEntry(state, { kind: 'notice', step: Number(data.step ?? 0), text: `Step ${Number(data.step ?? 0) + 1}`, status: 'running' });
+    case 'step.complete': {
+      const step = Number(data.step ?? 0);
+      const failed = payload.failed === true || payload.ok === false;
+      const status: LogEntry['status'] = failed ? 'error' : 'ok';
+      const entries = [...state.entries];
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        const entry = entries[i]!;
+        if (entry.kind === 'notice' && entry.step === step && /^Step /.test(entry.text)) {
+          entries[i] = { ...entry, status };
+          break;
+        }
+      }
+      return { ...state, entries };
+    }
     case 'assistant.delta': {
       const text = String(payload.text ?? '');
       const entries = [...state.entries];
@@ -74,7 +97,16 @@ export function applyEvent(state: SessionState, event: string, data: Record<stri
     }
     case 'assistant.message': {
       const text = String(payload.content ?? '');
-      if (!text) return state;
+      if (!text) {
+        // A model can return no content; never leave the stream bubble spinning.
+        const entries = [...state.entries];
+        const last = entries[entries.length - 1];
+        if (last?.kind === 'assistant' && last.status === 'running') {
+          entries[entries.length - 1] = { ...last, status: 'ok' };
+          return { ...state, entries };
+        }
+        return state;
+      }
       const settled = payload.final === true;
       const entries = [...state.entries];
       const last = entries[entries.length - 1];
@@ -123,10 +155,10 @@ export function applyEvent(state: SessionState, event: string, data: Record<stri
       return withEntry(state, {
         kind: 'notice',
         text: `Self-heal: ${String(payload.detail ?? payload.kind ?? 'retrying')}`,
-        status: 'running',
+        status: 'ok',
       });
     case 'retry':
-      return withEntry(state, { kind: 'notice', text: `Retrying after a transport error`, status: 'running' });
+      return withEntry(state, { kind: 'notice', text: `Retrying after a transport error`, status: 'ok' });
     case 'context':
       return {
         ...state,
@@ -137,38 +169,42 @@ export function applyEvent(state: SessionState, event: string, data: Record<stri
           truncated: Array.isArray(payload.truncated) ? payload.truncated.length : 0,
         },
       };
+    case 'cancelled':
+      return withEntry(settleRunning({ ...state, streaming: false }, 'ok'), {
+        kind: 'notice',
+        text: 'Run stopped by the user.',
+        status: 'ok',
+      });
+    case 'run.end': {
+      // `result` carries the user-facing summary; this event only settles rows.
+      const status: LogEntry['status'] = payload.status === 'failed' ? 'error' : 'ok';
+      return settleRunning({ ...state, streaming: false }, status);
+    }
     case 'result': {
       const result = data as unknown as AgentResult;
-      return {
-        ...state,
-        streaming: false,
-        result,
-        runId: result.runId ?? state.runId,
-        entries: [
-          ...state.entries,
-          {
-            id: nextId++,
-            kind: 'notice',
-            text:
-              result.status === 'completed'
-                ? result.kind === 'explain'
-                  ? 'Explained from workspace context in one pass (0 tools).'
-                  : `Completed in ${result.steps} step(s), ${result.toolCalls} tool call(s).`
-                : `${result.status.toUpperCase()}: ${result.message}`,
-            status: result.status === 'completed' ? 'ok' : result.status === 'failed' ? 'error' : 'running',
-          },
-        ],
-      };
+      const status: LogEntry['status'] = result.status === 'failed' ? 'error' : 'ok';
+      return withEntry(
+        settleRunning({ ...state, streaming: false, result, runId: result.runId ?? state.runId }, status),
+        {
+          kind: 'notice',
+          text:
+            result.status === 'completed'
+              ? result.kind === 'explain'
+                ? 'Explained from workspace context in one pass (0 tools).'
+                : `Completed in ${result.steps} step(s), ${result.toolCalls} tool call(s).`
+              : `${result.status.toUpperCase()}: ${result.message}`,
+          status,
+        },
+      );
     }
     case 'error':
-      return {
-        ...state,
-        streaming: false,
-        error: String(data.message ?? 'Unknown error'),
-        entries: [...state.entries, { id: nextId++, kind: 'notice', text: String(data.message ?? 'Unknown error'), status: 'error' }],
-      };
+      return withEntry(settleRunning({ ...state, streaming: false, error: String(data.message ?? 'Unknown error') }, 'error'), {
+        kind: 'notice',
+        text: String(data.message ?? 'Unknown error'),
+        status: 'error',
+      });
     case 'done':
-      return { ...state, streaming: false };
+      return settleRunning({ ...state, streaming: false }, 'ok');
     default:
       return state;
   }

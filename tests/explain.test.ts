@@ -26,6 +26,10 @@ describe('codebase explanations', () => {
       'give me a codebase overview',
       'overview of the architecture',
       'help me understand the retry policy',
+      'explian main folder code',
+      'can you expliane the project structure?',
+      'what is this project?',
+      'give me an answer about the workspace',
     ]) {
       expect(isExplanationGoal(goal), goal).toBe(true);
     }
@@ -56,6 +60,16 @@ describe('codebase explanations', () => {
     expect(sections.some((section) => section.id === 'explain:README.md')).toBe(true);
     expect(sections.some((section) => section.id === 'explain:src/auth.ts')).toBe(true);
     expect(sections.some((section) => section.id === 'explain:src/notes.txt')).toBe(true);
+  });
+
+  it('includes conventional entry files even when nested deeply', async () => {
+    root = await tempDir('anneal-explain-');
+    await writeFiles(root, {
+      'app/src/main/java/com/example/demo/MainActivity.kt': 'class MainActivity {}\n',
+    });
+
+    const sections = await explainSections(root, 'explain this project');
+    expect(sections.some((section) => section.id === 'explain:app/src/main/java/com/example/demo/MainActivity.kt')).toBe(true);
   });
 
   it('caps individual file excerpts so an explanation stays bounded', async () => {
@@ -91,6 +105,27 @@ describe('codebase explanations', () => {
     expect(result).toMatchObject({ status: 'completed', steps: 1, toolCalls: 0, resumable: false });
     expect(events.map((event) => event.type)).toEqual(expect.arrayContaining(['context', 'assistant.delta', 'assistant.message']));
     expect(await service.runs()).toHaveLength(0);
+  });
+
+  it('still prints a useful answer when the model returns empty content', async () => {
+    root = await tempDir('anneal-explain-');
+    await writeFiles(root, { 'README.md': '# Demo\nA small demo project.' });
+    const client = fakeClient(async () => textResult(''));
+    const service = new AnnealService(loadConfig({ workspaceRoot: root, env: {} }), client);
+    const events: AgentEvent[] = [];
+
+    const result = await service.run({ goal: 'explain the project', onEvent: (event) => events.push(event) });
+    const deltas = events
+      .filter((event) => event.type === 'assistant.delta')
+      .map((event) => String((event.data as { text?: unknown })?.text ?? ''))
+      .join('');
+    const final = events.find((event) => event.type === 'assistant.message');
+
+    expect(result.status).toBe('completed');
+    expect(deltas).toContain('Workspace map:');
+    expect(deltas).toContain('README.md');
+    expect(final?.data).toMatchObject({ final: true });
+    expect(String((final!.data as { content?: unknown }).content)).toContain('README.md');
   });
 
   it('adds workspace context to Ask without forcing the explanation format', async () => {

@@ -14,13 +14,29 @@ import { isIgnoredPath, resolveInWorkspace } from '../util/paths';
  */
 
 const EXPLAIN_PREFIX =
-  /^\s*(?:(?:can|could|would|will)\s+you\s+|please\s+)?(?:explain|describe|summarise|summarize|walk\s+me\s+through|help\s+me\s+understand|give\s+me\s+(?:an?\s+)?(?:[a-z][a-z-]*\s+){0,3}(?:overview|introduction)(?:\s+(?:of|to|for))?|overview\s+of|tell\s+me\s+about|how\s+(?:does|do|is|are)|what\s+(?:does|do|is|are)|where\s+(?:is|are)|why\s+(?:does|do|is|are))\b/i;
+  /^\s*(?:(?:can|could|would|will)\s+you\s+|please\s+)?(?:explain|describe|summarise|summarize|walk\s+me\s+through|help\s+me\s+understand|give\s+me\s+(?:an?\s+)?(?:[a-z][a-z-]*\s+){0,3}(?:overview|introduction|explanation|answer|summary)(?:\s+(?:of|to|for))?|overview\s+of|tell\s+me\s+about|how\s+(?:does|do|is|are)|what\s+(?:does|do|is|are|is\s+(?:this|the)\s+(?:project|codebase|code|workspace|repo))|where\s+(?:is|are)|why\s+(?:does|do|is|are))\b/i;
 const FOLLOWUP_ACTION =
   /(?:\band|,?\s*then)\s+(?:add|build|change|create|delete|edit|fix|generate|implement|install|modify|refactor|remove|rename|replace|run|test|update|write)\b/i;
 
+/** Common typos people actually type when asking for an explanation. */
+const EXPLAIN_TYPOS: Array<[RegExp, string]> = [
+  [/\bexplian\b/gi, 'explain'],
+  [/\bexpliane\b/gi, 'explain'],
+  [/\bexlpain\b/gi, 'explain'],
+  [/\bexplin\b/gi, 'explain'],
+  [/\bexplane\b/gi, 'explain'],
+  [/\bexplaine\b/gi, 'explain'],
+  [/\bsummrise\b/gi, 'summarise'],
+  [/\bsumarize\b/gi, 'summarize'],
+];
+
+function normalizeExplanationGoal(text: string): string {
+  return EXPLAIN_TYPOS.reduce((value, [pattern, replacement]) => value.replace(pattern, replacement), text);
+}
+
 /** Only clearly explanatory, read-only goals take the one-call path. */
 export function isExplanationGoal(goal: string): boolean {
-  const text = goal.trim();
+  const text = normalizeExplanationGoal(goal.trim());
   if (!text || text.length > 500) return false;
   if (FOLLOWUP_ACTION.test(text)) return false;
   return EXPLAIN_PREFIX.test(text);
@@ -30,7 +46,7 @@ const MAX_MAP_LINES = 240;
 const MAX_FILE_CHARS = 6000;
 const MAX_CANDIDATES = 12;
 
-const ANCHOR_FILE = /(^|\/)(readme(\.[a-z0-9]+)*|license(\.[a-z0-9]+)*|package\.json|tsconfig(\.[a-z0-9]+)*\.json|vite\.config\.[a-z0-9]+|cargo\.toml|pyproject\.toml|go\.mod|makefile|dockerfile|main\.(ts|tsx|js|jsx|py|go|rs)|index\.(ts|tsx|js|jsx)|app\.(ts|tsx|js|jsx|py))$/i;
+const ANCHOR_FILE = /(^|\/)(readme(\.[a-z0-9]+)*|license(\.[a-z0-9]+)*|package\.json|tsconfig(\.[a-z0-9]+)*\.json|vite\.config\.[a-z0-9]+|cargo\.toml|pyproject\.toml|go\.mod|settings\.gradle\.kts|build\.gradle\.kts|makefile|dockerfile|main\.(ts|tsx|js|jsx|py|go|rs|kt|java)|mainactivity\.kt|index\.(ts|tsx|js|jsx)|app\.(ts|tsx|js|jsx|py|kt|java)|program\.cs)$/i;
 
 interface WorkspaceEntry {
   path: string;
@@ -41,7 +57,7 @@ interface WorkspaceEntry {
 async function scanWorkspace(root: string): Promise<WorkspaceEntry[]> {
   const entries: WorkspaceEntry[] = [];
   const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 3 || entries.length >= 600) return;
+    if (depth > 10 || entries.length >= 600) return;
     let children: import('node:fs').Dirent[];
     try {
       children = await fs.readdir(dir, { withFileTypes: true });
@@ -111,7 +127,7 @@ export async function explainSections(
   };
   for (const file of files.slice(0, 8)) add(file);
   for (const entry of entries) {
-    if (entry.depth <= 2 && !entry.directory && ANCHOR_FILE.test(entry.path)) add(entry.path);
+    if (!entry.directory && ANCHOR_FILE.test(entry.path)) add(entry.path);
     if (candidates.length >= MAX_CANDIDATES) break;
   }
   if (candidates.length < MAX_CANDIDATES && question.trim()) {
