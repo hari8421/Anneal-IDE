@@ -5,7 +5,7 @@ import { api, type SkillInfo } from '../lib/api';
  * Create reusable instruction packs stored in `.anneal/skills/<id>/SKILL.md`.
  * The format matches OpenCode skills so the same folder can be used there.
  */
-export function SkillsTab() {
+export function SkillsTab({ onInvoke }: { onInvoke?: (id: string) => void }) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; content: string } | null>(null);
@@ -79,8 +79,9 @@ export function SkillsTab() {
     <div className="panel-body">
       <div className="hint">
         Skills are reusable workflows in <code>.anneal/skills/&lt;id&gt;/SKILL.md</code>. They use the same{' '}
-        <code>SKILL.md</code> layout as OpenCode and are injected into every agent run unless{' '}
-        <code>auto: false</code> is set.
+        <code>SKILL.md</code> layout as OpenCode. <code>auto: true</code> pins them into every run; manual
+        skills are included when you click <strong>Invoke</strong> or select them in chat. You can also ask
+        the agent to create a skill for you.
       </div>
 
       <div className="row">
@@ -115,6 +116,11 @@ export function SkillsTab() {
                 <span style={{ marginLeft: 4 }}>{skill.length} chars</span>
               </span>
             </button>
+            {onInvoke && (
+              <button className="btn ghost tiny" title="Use this skill in the next chat request" onClick={() => onInvoke(skill.id)}>
+                Invoke
+              </button>
+            )}
             <button className="btn ghost tiny" onClick={() => void remove(skill.id)}>Delete</button>
           </div>
         ))}

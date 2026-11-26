@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { applyPatch, parsePatch } from '../agent/patch';
 import type { ToolSpec } from '../llm/client';
+import { loadSkills, safeSkillId } from '../skills/skills';
 import { matchesAnyGlob } from '../util/glob';
 import { ensureDir, isIgnoredPath, resolveInWorkspace, toRelative } from '../util/paths';
 
@@ -418,13 +419,116 @@ export const runCommandTool: Tool = {
   },
 };
 
+export const listSkillsTool: Tool = {
+  name: 'list_skills',
+  description:
+    'List saved workspace skills with their ids, names and descriptions. Use this to discover a reusable workflow before invoking it.',
+  parameters: { type: 'object', properties: {} },
+  async run(_args, ctx) {
+    const skills = await loadSkills(path.join(ctx.workspaceRoot, '.anneal', 'skills'));
+    if (!skills.length) return { ok: true, content: 'No workspace skills are saved yet.' };
+    const lines = skills.map(
+      (skill) => `${skill.id} — ${skill.name}${skill.description ? `: ${skill.description}` : ''} (${skill.auto ? 'auto' : 'manual'})`,
+    );
+    return { ok: true, content: clip(lines.join('\n')).text };
+  },
+};
+
+export const invokeSkillTool: Tool = {
+  name: 'invoke_skill',
+  description:
+    'Load a saved workspace skill into the current run so its instructions guide the following steps. Use list_skills first if you do not know the id.',
+  parameters: {
+    type: 'object',
+    properties: { id: { type: 'string', description: 'Skill id from list_skills' } },
+    required: ['id'],
+  },
+  async run(args, ctx) {
+    const id = safeSkillId(reqStr(args, 'id'));
+    const skills = await loadSkills(path.join(ctx.workspaceRoot, '.anneal', 'skills'));
+    const skill = skills.find((entry) => entry.id === id || safeSkillId(entry.name) === id);
+    if (!skill) {
+      const available = skills.slice(0, 12).map((entry) => entry.id).join(', ');
+      return {
+        ok: false,
+        content: `Skill "${id}" was not found.${available ? ` Available skills: ${available}.` : ' No skills are saved yet.'}`,
+      };
+    }
+    return { ok: true, content: `# Skill: ${skill.name}\n\n${skill.content}` };
+  },
+};
+
+export const createSkillTool: Tool = {
+  name: 'create_skill',
+  description:
+    'Create or update a reusable SKILL.md workflow pack under .anneal/skills/<id>/SKILL.md. Use it when the user asks to create/save a skill or a repeatable workflow that should survive later runs.',
+  parameters: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Short stable id, e.g. release-check' },
+      name: { type: 'string', description: 'Display name' },
+      description: { type: 'string', description: 'One line describing when to use this skill' },
+      content: { type: 'string', description: 'Markdown instructions the agent should follow when this skill is used' },
+      auto: { type: 'boolean', description: 'Set true only if this skill should run in every future request; otherwise pass false (defaults to true)' },
+    },
+    required: ['id', 'content'],
+  },
+  async run(args, ctx) {
+    const id = safeSkillId(reqStr(args, 'id'));
+    const body = bodyWithoutFrontmatter(reqStr(args, 'content'));
+    if (!body) return { ok: false, content: 'create_skill needs non-empty instruction content.' };
+    if (body.length > MAX_WRITE_CHARS) {
+      return { ok: false, content: `Skill content is too large (${body.length} chars, limit ${MAX_WRITE_CHARS}).` };
+    }
+    const name = str(args, 'name')?.trim() || id;
+    const description = str(args, 'description')?.trim() || `Reusable ${name} workflow`;
+    const auto = args.auto !== false;
+    const relative = `.anneal/skills/${id}/SKILL.md`;
+    const absolute = path.join(ctx.workspaceRoot, '.anneal', 'skills', id, 'SKILL.md');
+    const frontmatter = [
+      '---',
+      `name: ${JSON.stringify(name)}`,
+      `description: ${JSON.stringify(description)}`,
+      `auto: ${auto}`,
+      '---',
+      '',
+    ].join('\n');
+    await ensureDir(path.dirname(absolute));
+    await fs.writeFile(absolute, `${frontmatter}${body}\n`, 'utf8');
+    ctx.onEvent?.({ type: 'skill.created', id, path: relative });
+    return {
+      ok: true,
+      content: `Created skill "${id}" at ${relative}. ${auto ? 'It is pinned into future runs.' : 'It is available for explicit invocation.'}`,
+    };
+  },
+};
+
+function bodyWithoutFrontmatter(raw: string): string {
+  const text = raw.replace(/^\uFEFF/, '').trim();
+  if (!text.startsWith('---')) return text;
+  const end = text.indexOf('\n---', 3);
+  if (end < 0) return text;
+  const bodyStart = text.indexOf('\n', end + 4);
+  return (bodyStart >= 0 ? text.slice(bodyStart + 1) : '').trim();
+}
+
 function projectRel(root: string, absolute: string): string {
   const rel = toRelative(root, absolute);
   return rel || '.';
 }
 
 export function createDefaultTools(): Tool[] {
-  return [readFileTool, listFilesTool, searchTool, applyPatchTool, writeFileTool, runCommandTool];
+  return [
+    readFileTool,
+    listFilesTool,
+    searchTool,
+    applyPatchTool,
+    writeFileTool,
+    runCommandTool,
+    listSkillsTool,
+    invokeSkillTool,
+    createSkillTool,
+  ];
 }
 
 export function toolSpecs(tools: Tool[]): ToolSpec[] {

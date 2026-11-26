@@ -6,6 +6,7 @@ interface SpecsPanelProps {
   busy: boolean;
   focusId: string | null;
   autoRequest: string | null;
+  skills: string[];
   onFocusHandled: () => void;
   onAutoRequestHandled: () => void;
   onRunTask: (specId: string, taskId: string) => void;
@@ -18,6 +19,7 @@ export default function SpecsPanel({
   busy,
   focusId,
   autoRequest,
+  skills,
   onFocusHandled,
   onAutoRequestHandled,
   onRunTask,
@@ -99,7 +101,7 @@ export default function SpecsPanel({
     try {
       await stream(
         `/api/specs/${encodeURIComponent(id)}/generate`,
-        { request: text },
+        { request: text, skills },
         (event, data) => {
           if (event === 'delta') {
             const artifact = String(data.stage ?? '') as Artifact;

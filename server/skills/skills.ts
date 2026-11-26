@@ -67,13 +67,18 @@ export async function loadSkills(dir: string): Promise<SkillFile[]> {
   return skills;
 }
 
-export function skillSections(skills: SkillFile[]): ContextSection[] {
+/**
+ * Auto skills are always pinned. Explicitly invoked skills join them for this
+ * run, including packs authored with `auto: false`.
+ */
+export function skillSections(skills: SkillFile[], invokedIds: string[] = []): ContextSection[] {
+  const invoked = new Set(invokedIds.filter(Boolean));
   return skills
-    .filter((skill) => skill.auto)
+    .filter((skill) => skill.auto || invoked.has(skill.id))
     .map((skill, index) => ({
       id: `skill:${skill.id}`,
       kind: 'skill' as const,
-      title: `Skill: ${skill.name}${skill.description ? ` — ${skill.description}` : ''}`,
+      title: `Skill: ${skill.name}${skill.description ? ` — ${skill.description}` : ''}${invoked.has(skill.id) ? ' (invoked)' : ''}`,
       content: skill.content,
       priority: 94 - index,
     }));

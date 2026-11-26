@@ -289,9 +289,10 @@ an explicit hint to add a key or pick another endpoint. The client takes an `end
 
 Workspace skills (`server/skills/skills.ts`) are Markdown workflow packs in
 `.anneal/skills/<id>/SKILL.md`, using the same frontmatter layout as OpenCode skills. `loadSkills()`
-reads them, `skillSections()` injects `auto: true` packs into every run's context, and spec
-generation receives the same instructions. CRUD is exposed at `/api/skills` and edited in the
-Skills panel.
+reads them, `skillSections()` injects `auto: true` packs into every run's context, and explicitly
+invoked ids add `auto: false` packs for a single Ask/Agent/Spec request. Spec generation receives the
+same instructions. CRUD is exposed at `/api/skills`, edited in the Skills panel, and the agent can
+persist new packs with `create_skill` and reuse them with `list_skills`/`invoke_skill`.
 
 ### 3.13 Desktop packaging
 

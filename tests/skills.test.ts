@@ -43,7 +43,7 @@ describe('workspace skills', () => {
     expect(skills[0]!.name).toBe('Release');
   });
 
-  it('only injects auto skills into context', () => {
+  it('injects auto skills by default and invoked manual skills on demand', () => {
     const auto = parseSkill('---\nname: Auto\n---\n\nAlways on.', 'auto');
     const manual = parseSkill('---\nname: Manual\nauto: false\n---\n\nOnly on demand.', 'manual');
     const sections = skillSections([auto, manual]);
@@ -52,6 +52,11 @@ describe('workspace skills', () => {
     expect(sections[0]!.id).toBe('skill:auto');
     expect(sections[0]!.kind).toBe('skill');
     expect(sections[0]!.content).toContain('Always on.');
+
+    const invoked = skillSections([auto, manual], ['manual']);
+    expect(invoked.map((section) => section.id)).toEqual(['skill:auto', 'skill:manual']);
+    expect(invoked[1]!.title).toContain('(invoked)');
+    expect(invoked[1]!.content).toContain('Only on demand.');
   });
 
   it('sanitises skill ids so paths stay inside the skills directory', () => {

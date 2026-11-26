@@ -27,6 +27,7 @@ import {
   type FileNode,
   type Health,
   type RunSummary,
+  type SkillInfo,
 } from './lib/api';
 import { chatTitle, loadChats, newChat, saveChats, type ChatMode, type ChatRecord } from './lib/chat';
 import { applyEvent, emptySession } from './lib/session';
@@ -127,6 +128,8 @@ export default function App() {
   const [activity, setActivity] = useState<ActivityKey>('files');
   const [autonomy, setAutonomy] = useState<Autonomy>('autopilot');
   const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [newFile, setNewFile] = useState('');
   const [showNewFile, setShowNewFile] = useState(false);
@@ -230,13 +233,24 @@ export default function App() {
     }
   }, []);
 
+  const refreshSkills = useCallback(async () => {
+    try {
+      const { skills: loaded } = await api.skills();
+      setSkills(loaded);
+      const available = new Set(loaded.map((skill) => skill.id));
+      setSelectedSkills((prev) => prev.filter((id) => available.has(id)));
+    } catch {
+      // Skill discovery is best-effort; the agent can still create skills.
+    }
+  }, []);
+
   const switchWorkspace = useCallback(async () => {
     setOpenFiles([]);
     setActivePath(null);
     setBreakpoints([]);
     setReveal(null);
-    await Promise.all([refreshHealth(), refreshTree(), refreshRuns()]);
-  }, [refreshHealth, refreshTree, refreshRuns]);
+    await Promise.all([refreshHealth(), refreshTree(), refreshRuns(), refreshSkills()]);
+  }, [refreshHealth, refreshTree, refreshRuns, refreshSkills]);
 
   useEffect(() => {
     const isFirstLaunch = !localStorage.getItem('anneal.welcomed');
@@ -247,9 +261,10 @@ export default function App() {
     void refreshHealth();
     void refreshTree();
     void refreshRuns();
+    void refreshSkills();
     const timer = setInterval(() => void refreshHealth(), 15_000);
     return () => clearInterval(timer);
-  }, [refreshHealth, refreshTree, refreshRuns]);
+  }, [refreshHealth, refreshTree, refreshRuns, refreshSkills]);
 
   useEffect(() => {
     saveChats(chats);
@@ -271,7 +286,8 @@ export default function App() {
     if (session.streaming || askStreaming) return;
     void refreshRuns();
     void refreshTree();
-  }, [session.streaming, askStreaming, refreshRuns, refreshTree]);
+    void refreshSkills();
+  }, [session.streaming, askStreaming, refreshRuns, refreshTree, refreshSkills]);
 
   useEffect(() => {
     const result = session.result;
@@ -428,7 +444,7 @@ export default function App() {
       setRunSummary(null);
       setError(null);
       try {
-        await stream(url, body, broadcast, controller.signal);
+        await stream(url, { ...(body as Record<string, unknown>), skills: selectedSkills }, broadcast, controller.signal);
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
           updateChat(id, (chat) => ({ ...chat, session: applyEvent(chat.session, 'cancelled', {}) }));
@@ -443,7 +459,7 @@ export default function App() {
         await refreshRuns();
       }
     },
-    [broadcast, ensureChat, refreshRuns, refreshTree, updateChat],
+    [broadcast, ensureChat, refreshRuns, refreshTree, selectedSkills, updateChat],
   );
 
   const contextFiles = useCallback(() => {
@@ -453,6 +469,15 @@ export default function App() {
 
   const attachFiles = useCallback((paths: string[]) => {
     setSelected((prev) => [...new Set([...prev, ...paths])]);
+  }, []);
+
+  const toggleSkill = useCallback((id: string) => {
+    setSelectedSkills((prev) => (prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id]));
+  }, []);
+
+  const invokeSkill = useCallback((id: string) => {
+    setSelectedSkills((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setChatOpen(true);
   }, []);
 
   const runGoal = useCallback(
@@ -544,14 +569,14 @@ export default function App() {
             index === chat.askMessages.length - 1 ? { ...message, text: answer } : message,
           ),
         }));
-      }, controller.signal, contextual).catch((err: Error) => {
+      }, controller.signal, contextual, selectedSkills).catch((err: Error) => {
         if (err.name !== 'AbortError') setError(err.message);
       }).finally(() => {
         abortRef.current = null;
         setAskStreaming(false);
       });
     },
-    [ensureChat, updateChat],
+    [ensureChat, selectedSkills, updateChat],
   );
 
   const specGoal = useCallback(
@@ -910,12 +935,13 @@ export default function App() {
                     autoRequest={specAutoRequest}
                     onFocusHandled={() => setSpecFocusId(null)}
                     onAutoRequestHandled={() => setSpecAutoRequest(null)}
+                    skills={selectedSkills}
                     onRunTask={runSpecTask}
                     onRunNext={runNextTask}
                   />
                 )}
                 {activity === 'steering' && <SteeringTab />}
-                {activity === 'skills' && <SkillsTab />}
+                {activity === 'skills' && <SkillsTab onInvoke={invokeSkill} />}
                 {activity === 'hooks' && <HooksTab running={session.streaming} />}
                 {activity === 'runs' && (
                   <RunsTab
@@ -1004,6 +1030,10 @@ export default function App() {
               onAutonomyChange={changeAutonomy}
               selectedFiles={contextFiles()}
               onRemoveFile={(path) => setSelected((prev) => prev.filter((entry) => entry !== path))}
+              skills={skills}
+              selectedSkills={selectedSkills}
+              onToggleSkill={toggleSkill}
+              onRemoveSkill={(id) => setSelectedSkills((prev) => prev.filter((entry) => entry !== id))}
               workspaceFiles={workspaceFiles}
               runSummary={runSummary?.text ?? null}
               onRunGoal={runGoal}

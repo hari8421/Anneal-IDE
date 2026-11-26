@@ -534,6 +534,7 @@ function registerRoutes(): void {
       const result = await service.chatStream({
         messages: messages as Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
         contextual: body.contextual === true,
+        skills: strArray(body.skills),
         signal: controller.signal,
         onDelta: (chunk) => sse.send('delta', { text: chunk }),
       });
@@ -555,6 +556,7 @@ function registerRoutes(): void {
       const result = await service.run({
         goal: text(body.goal),
         files: strArray(body.files),
+        skills: strArray(body.skills),
         specId: typeof body.specId === 'string' ? body.specId : undefined,
         taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
         autonomy: body.autonomy === 'supervised' ? 'supervised' : body.autonomy === 'autopilot' ? 'autopilot' : undefined,
@@ -591,6 +593,7 @@ function registerRoutes(): void {
       const result = await service.resume(params.id!, {
         goal: text(body.goal),
         files: strArray(body.files),
+        skills: strArray(body.skills),
         specId: typeof body.specId === 'string' ? body.specId : undefined,
         taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
         autonomy: body.autonomy === 'supervised' ? 'supervised' : body.autonomy === 'autopilot' ? 'autopilot' : undefined,
@@ -652,6 +655,7 @@ function registerRoutes(): void {
     req.on('close', () => controller.abort());
     try {
       const result = await service.generateSpec(params.id!, text(body.request), {
+        skills: strArray(body.skills),
         signal: controller.signal,
         onStage: (stage, status) => sse.send('stage', { stage, status }),
         onDelta: (stage, text) => sse.send('delta', { stage, text }),
@@ -665,11 +669,13 @@ function registerRoutes(): void {
   });
 
   route('POST', '/api/specs/:id/tasks/:taskId/run', async ({ req, res, params }) => {
+    const body = await readJson(req);
     const sse = openSse(res);
     const controller = new AbortController();
     req.on('close', () => controller.abort());
     try {
       const result = await service.executeTask(params.id!, params.taskId!, {
+        skills: strArray(body.skills),
         signal: controller.signal,
         onEvent: (event) => sse.send(event.type, event),
       });
@@ -682,11 +688,13 @@ function registerRoutes(): void {
   });
 
   route('POST', '/api/specs/:id/run-next', async ({ req, res, params }) => {
+    const body = await readJson(req);
     const sse = openSse(res);
     const controller = new AbortController();
     req.on('close', () => controller.abort());
     try {
       const result = await service.executeNextTask(params.id!, {
+        skills: strArray(body.skills),
         signal: controller.signal,
         onEvent: (event) => sse.send(event.type, event),
       });

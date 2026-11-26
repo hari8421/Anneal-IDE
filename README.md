@@ -236,8 +236,13 @@ auto: true
 3. Run the release script.
 ```
 
-Skills with `auto: true` are injected into every agent prompt and spec-generation request;
-`auto: false` keeps a pack available in the workspace without loading it. CRUD is available through
+Skills with `auto: true` are injected into every agent prompt and spec-generation request.
+`auto: false` keeps a pack available without loading it until you invoke it: click **Invoke** in the
+Skills panel, or open the **Skills** menu in the chat composer and select one or more packs for the
+next Ask, Agent or Spec request. Invoked skills are included for that request and its runs.
+
+The agent can create skills too. Ask it to “create a skill for …” and it uses `create_skill` to write
+a valid `SKILL.md`, then `list_skills`/`invoke_skill` to reuse saved workflows. CRUD is available through
 `GET/POST/DELETE /api/skills`.
 
 ## Debugging and navigation

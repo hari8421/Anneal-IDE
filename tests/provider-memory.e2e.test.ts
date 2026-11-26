@@ -117,11 +117,11 @@ async function waitForServer(url: string, attempts = 80): Promise<void> {
   throw new Error('Server did not become ready in time');
 }
 
-async function runGoal(goal: string): Promise<string> {
+async function runGoal(goal: string, skills: string[] = []): Promise<string> {
   const response = await fetch(`${baseUrl}/api/run`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ goal, files: ['src/app.ts'] }),
+    body: JSON.stringify({ goal, files: ['src/app.ts'], skills }),
   });
   return response.text();
 }
@@ -244,5 +244,50 @@ describe('external provider + agent memory over real HTTP', () => {
 
     const missing = await fetch(`${baseUrl}/api/memory/facts/test%20command`, { method: 'DELETE' });
     expect(missing.status).toBe(404);
+  });
+
+  it('injects explicitly invoked manual skills into Ask, Agent and Spec requests', async () => {
+    const sentinel = 'WIRE_SKILL_SENTINEL_42';
+    const created = await fetch(`${baseUrl}/api/skills`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'wire-skill',
+        content: `---\nname: Wire skill\ndescription: Sentinels for wire tests\nauto: false\n---\n${sentinel}\n`,
+      }),
+    });
+    expect(created.status).toBe(200);
+
+    const chat = await fetch(`${baseUrl}/api/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: 'Say hello.' }],
+        contextual: true,
+        skills: ['wire-skill'],
+      }),
+    });
+    expect(chat.status).toBe(200);
+    await chat.text();
+    expect(promptText(lastRequest())).toContain(sentinel);
+
+    await runGoal('Say hello with a skill.', ['wire-skill']);
+    expect(promptText(lastRequest())).toContain(sentinel);
+
+    const spec = await fetch(`${baseUrl}/api/specs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Wire Skill Spec' }),
+    });
+    const { spec: detail } = (await spec.json()) as { spec: { id: string } };
+    const before = recorded.length;
+    const generated = await fetch(`${baseUrl}/api/specs/${detail.id}/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ request: 'A tiny feature.', skills: ['wire-skill'] }),
+    });
+    expect(generated.status).toBe(200);
+    await generated.text();
+    expect(recorded.slice(before).some((entry) => promptText(entry).includes(sentinel))).toBe(true);
   });
 });

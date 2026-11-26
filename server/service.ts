@@ -31,6 +31,8 @@ import { ensureDir, resolveInWorkspace, toRelative } from './util/paths';
 export interface RunRequest {
   goal: string;
   files?: string[];
+  /** Explicitly invoked skill ids; added to the auto-injected skills for this run. */
+  skills?: string[];
   specId?: string;
   taskId?: string;
   autonomy?: Autonomy;
@@ -48,6 +50,8 @@ export interface ChatStreamRequest {
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
   /** Add a compact workspace map and relevant files for read-only questions. */
   contextual?: boolean;
+  /** Explicitly invoked skill ids, including skills authored with `auto: false`. */
+  skills?: string[];
   signal?: AbortSignal;
   onDelta?: (text: string) => void;
 }
@@ -200,14 +204,15 @@ export class AnnealService {
 
   async chatStream(request: ChatStreamRequest): Promise<{ content: string; model: string }> {
     let messages = request.messages as ChatMessage[];
-    if (request.contextual) {
+    const invokedSkills = request.skills ?? [];
+    if (request.contextual || invokedSkills.length > 0) {
       const lastUser = messages.map((message, index) => ({ message, index })).reverse()
         .find(({ message }) => message.role === 'user');
       if (lastUser?.message.content.trim()) {
-        const sections = [
-          ...(await this.baselineSections()),
-          ...(await explainSections(this.config.workspaceRoot, lastUser.message.content, [])),
-        ];
+        const sections = await this.baselineSections([], invokedSkills);
+        if (request.contextual) {
+          sections.push(...(await explainSections(this.config.workspaceRoot, lastUser.message.content, [])));
+        }
         const built = buildContext({
           budgetTokens: this.config.contextBudgetTokens,
           reserveOutputTokens: this.config.reserveOutputTokens,
@@ -240,7 +245,7 @@ export class AnnealService {
     const question = request.goal.trim();
     const runId = `explain-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const sections = [
-      ...(await this.baselineSections(request.files ?? [])),
+      ...(await this.baselineSections(request.files ?? [], request.skills)),
       ...(await explainSections(this.config.workspaceRoot, question, request.files ?? [])),
     ];
     const built = buildContext({
@@ -298,7 +303,7 @@ export class AnnealService {
   }
 
   /** Memory, steering and skills apply to both agent runs and explanations. */
-  private async baselineSections(files: string[] = []): Promise<ContextSection[]> {
+  private async baselineSections(files: string[] = [], invokedSkills: string[] = []): Promise<ContextSection[]> {
     const sections: ContextSection[] = [];
     // Pinned memory goes first and is never dropped: it is the agent's
     // cross-run knowledge, and it is capped at maxCoreLines by the store.
@@ -316,7 +321,7 @@ export class AnnealService {
     const steering = await loadSteering(annealPaths(this.config.workspaceRoot).steering);
     sections.push(...steeringSections(selectSteering(steering, files)));
     const skills = await loadSkills(annealPaths(this.config.workspaceRoot).skills);
-    sections.push(...skillSections(skills));
+    sections.push(...skillSections(skills, invokedSkills));
     return sections;
   }
 
@@ -325,8 +330,9 @@ export class AnnealService {
     specId?: string,
     taskId?: string,
     query?: string,
+    invokedSkills: string[] = [],
   ): Promise<ContextSection[]> {
-    const sections = await this.baselineSections(files);
+    const sections = await this.baselineSections(files, invokedSkills);
 
     if (specId) {
       const spec = await this.specStore.read(specId);
@@ -446,7 +452,13 @@ export class AnnealService {
   private async startRun(request: RunRequest, journal: RunJournal): Promise<AgentResult> {
     if (!request.goal.trim()) throw new Error('A goal is required to start a run');
     const autonomy = request.autonomy ?? this.config.autonomy;
-    const sections = await this.buildSections(request.files, request.specId, request.taskId, request.goal);
+    const sections = await this.buildSections(
+      request.files,
+      request.specId,
+      request.taskId,
+      request.goal,
+      request.skills,
+    );
     const controller = new AbortController();
     const external = request.signal;
     const onAbort = () => controller.abort();
@@ -565,13 +577,19 @@ export class AnnealService {
   async generateSpec(
     id: string,
     featureRequest: string,
-    options: { onDelta?: (stage: string, text: string) => void; onStage?: (stage: string, status: string) => void; signal?: AbortSignal } = {},
+    options: {
+      onDelta?: (stage: string, text: string) => void;
+      onStage?: (stage: string, status: string) => void;
+      signal?: AbortSignal;
+      skills?: string[];
+    } = {},
   ): Promise<GenerateSpecResult> {
     const steering = (await loadSteering(annealPaths(this.config.workspaceRoot).steering))
       .map((file) => `## ${file.name}\n${file.content}`)
       .join('\n\n');
+    const invoked = new Set(options.skills ?? []);
     const skills = (await loadSkills(annealPaths(this.config.workspaceRoot).skills))
-      .filter((skill) => skill.auto)
+      .filter((skill) => skill.auto || invoked.has(skill.id))
       .map((skill) => `## ${skill.name}\n${skill.content}`)
       .join('\n\n');
     return generateSpec({
@@ -589,7 +607,12 @@ export class AnnealService {
   async executeTask(
     specId: string,
     taskId: string,
-    options: { onEvent?: (event: AgentEvent) => void; signal?: AbortSignal; autonomy?: Autonomy } = {},
+    options: {
+      onEvent?: (event: AgentEvent) => void;
+      signal?: AbortSignal;
+      autonomy?: Autonomy;
+      skills?: string[];
+    } = {},
   ): Promise<AgentResult> {
     const spec = await this.specStore.read(specId);
     const task = parseTasks(spec.tasks ?? '').find((t) => t.id === taskId);
@@ -598,6 +621,7 @@ export class AnnealService {
       goal: `Implement task ${task.id}: ${task.title}\n\nAcceptance: the change must satisfy the referenced requirements and the project must still build.`,
       specId,
       taskId,
+      skills: options.skills,
       autonomy: options.autonomy,
       onEvent: options.onEvent,
       signal: options.signal,
@@ -605,7 +629,10 @@ export class AnnealService {
   }
 
   /** Run the next unchecked task in a spec. */
-  async executeNextTask(specId: string, options: { onEvent?: (event: AgentEvent) => void; signal?: AbortSignal } = {}) {
+  async executeNextTask(
+    specId: string,
+    options: { onEvent?: (event: AgentEvent) => void; signal?: AbortSignal; skills?: string[] } = {},
+  ) {
     const spec = await this.specStore.read(specId);
     const task = parseTasks(spec.tasks ?? '').find((t) => !t.checked);
     if (!task) throw new Error(`Spec "${specId}" has no remaining unchecked tasks`);

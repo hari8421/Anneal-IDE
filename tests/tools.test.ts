@@ -3,7 +3,10 @@ import {
   applyPatchTool,
   checkCommandAllowed,
   createDefaultTools,
+  createSkillTool,
+  invokeSkillTool,
   listFilesTool,
+  listSkillsTool,
   readFileTool,
   runCommandTool,
   searchTool,
@@ -98,6 +101,57 @@ describe('file tools', () => {
   });
 });
 
+describe('skill tools', () => {
+  it('creates a parseable skill and lists/invokes it', async () => {
+    const root = await tempDir();
+    const created = await createSkillTool.run(
+      {
+        id: 'release check!',
+        name: 'Release check',
+        description: 'Prepare a release',
+        content: '# Workflow\nRun the release script.',
+        auto: false,
+      },
+      context(root),
+    );
+    expect(created.ok).toBe(true);
+    expect(created.content).toContain('.anneal/skills/release-check/SKILL.md');
+
+    const stored = await readFile(root, '.anneal/skills/release-check/SKILL.md');
+    expect(stored).toContain('name: "Release check"');
+    expect(stored).toContain('auto: false');
+    expect(stored).toContain('Run the release script.');
+
+    const listed = await listSkillsTool.run({}, context(root));
+    expect(listed.content).toContain('release-check — Release check');
+    expect(listed.content).toContain('(manual)');
+
+    const invoked = await invokeSkillTool.run({ id: 'release-check' }, context(root));
+    expect(invoked.ok).toBe(true);
+    expect(invoked.content).toContain('Run the release script.');
+  });
+
+  it('replaces existing frontmatter and rejects unknown skills', async () => {
+    const root = await tempDir();
+    const created = await createSkillTool.run(
+      {
+        id: 'test-flow',
+        content: '---\nname: Old\ndescription: Old\nauto: true\n---\n\nRun npm test.',
+      },
+      context(root),
+    );
+    expect(created.ok).toBe(true);
+    const stored = await readFile(root, '.anneal/skills/test-flow/SKILL.md');
+    expect(stored).toContain('name: "test-flow"');
+    expect(stored).not.toContain('name: Old');
+    expect(stored).toContain('Run npm test.');
+
+    const missing = await invokeSkillTool.run({ id: 'does-not-exist' }, context(root));
+    expect(missing.ok).toBe(false);
+    expect(missing.content).toContain('test-flow');
+  });
+});
+
 describe('run_command', () => {
   it('runs a safe command and reports its output', async () => {
     const root = await tempDir();
@@ -134,7 +188,10 @@ describe('run_command', () => {
     const tools = createDefaultTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'apply_patch',
+      'create_skill',
+      'invoke_skill',
       'list_files',
+      'list_skills',
       'read_file',
       'run_command',
       'search',

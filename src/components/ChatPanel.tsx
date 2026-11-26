@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import AttachmentPicker from './AttachmentPicker';
-import type { Autonomy, Health } from '../lib/api';
+import type { Autonomy, Health, SkillInfo } from '../lib/api';
 import type { AskMessage, ChatMode, ChatRecord } from '../lib/chat';
 import type { LogEntry, SessionState } from '../lib/session';
 import { fuzzyScore } from './QuickOpen';
@@ -22,6 +22,10 @@ interface ChatPanelProps {
   onAutonomyChange: (autonomy: Autonomy) => void;
   selectedFiles: string[];
   onRemoveFile: (path: string) => void;
+  skills: SkillInfo[];
+  selectedSkills: string[];
+  onToggleSkill: (id: string) => void;
+  onRemoveSkill: (id: string) => void;
   workspaceFiles: string[];
   runSummary: string | null;
   onRunGoal: (goal: string, files: string[]) => void;
@@ -54,6 +58,9 @@ const TOOL_ICONS: Record<string, IconName> = {
   search: 'search',
   run_command: 'terminal',
   remember: 'database',
+  list_skills: 'sparkles',
+  invoke_skill: 'sparkles',
+  create_skill: 'sparkles',
 };
 
 function AgentEntry({ entry, onOpenFile }: { entry: LogEntry; onOpenFile: (path: string) => void }) {
@@ -136,6 +143,10 @@ export default function ChatPanel({
   onAutonomyChange,
   selectedFiles,
   onRemoveFile,
+  skills,
+  selectedSkills,
+  onToggleSkill,
+  onRemoveSkill,
   workspaceFiles,
   runSummary,
   onRunGoal,
@@ -157,6 +168,7 @@ export default function ChatPanel({
   const [historyAt, setHistoryAt] = useState(-1);
   const [showHistory, setShowHistory] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const offline = Boolean(health && !health.lmStudio.ok);
@@ -375,12 +387,18 @@ export default function ChatPanel({
         )}
       </div>
 
-      {selectedFiles.length > 0 && (
+      {(selectedFiles.length > 0 || selectedSkills.length > 0) && (
         <div className="ui-chips">
           {selectedFiles.map((file) => (
-            <span key={file} className="ui-chip" title={file}>
+            <span key={`file:${file}`} className="ui-chip" title={file}>
               <Icon name="file" size={11} /> {file.split('/').pop()}
               <button type="button" aria-label={`Remove ${file}`} onClick={() => onRemoveFile(file)}><Icon name="close" size={11} /></button>
+            </span>
+          ))}
+          {selectedSkills.map((id) => (
+            <span key={`skill:${id}`} className="ui-chip" title={`Invoke skill ${id}`}>
+              <Icon name="sparkles" size={11} /> {skills.find((skill) => skill.id === id)?.name ?? id}
+              <button type="button" aria-label={`Remove skill ${id}`} onClick={() => onRemoveSkill(id)}><Icon name="close" size={11} /></button>
             </span>
           ))}
         </div>
@@ -395,6 +413,21 @@ export default function ChatPanel({
                 <Icon name="file" size={13} /> <span>{path}</span>
               </button>
             ))}
+          </div>
+        )}
+        {skillPickerOpen && (
+          <div className="ui-mention-menu">
+            <div className="ui-menu-head">Invoke saved skills</div>
+            {skills.map((skill) => (
+              <button key={skill.id} type="button" onClick={() => onToggleSkill(skill.id)}>
+                <Icon name={selectedSkills.includes(skill.id) ? 'check' : 'sparkles'} size={13} />
+                <span className="ui-grow">
+                  <strong>{skill.name}</strong>
+                  <small>{skill.description || skill.id}{!skill.auto ? ' · manual' : ''}</small>
+                </span>
+              </button>
+            ))}
+            {!skills.length && <div className="ui-empty small">No skills yet. Ask the agent to create one or use the Skills panel.</div>}
           </div>
         )}
         <textarea
@@ -427,12 +460,22 @@ export default function ChatPanel({
             type="button"
             className="ui-btn ghost small"
             title="Browse and attach workspace files"
-            onClick={() => setPickerOpen(true)}
+            onClick={() => { setPickerOpen(true); setSkillPickerOpen(false); }}
           >
             <Icon name="paperclip" size={12} /> Attach
           </button>
+          <button
+            type="button"
+            className="ui-btn ghost small"
+            aria-pressed={selectedSkills.length > 0}
+            title="Invoke saved workspace skills for this request"
+            onClick={() => { setSkillPickerOpen((value) => !value); setPickerOpen(false); }}
+          >
+            <Icon name="sparkles" size={12} /> Skills{selectedSkills.length ? ` (${selectedSkills.length})` : ''}
+          </button>
           <span className="ui-composer-hint">
-            {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'} attached
+            {selectedFiles.length} file{selectedFiles.length === 1 ? '' : 's'}
+            {selectedSkills.length ? ` · ${selectedSkills.length} skill${selectedSkills.length === 1 ? '' : 's'}` : ''}
           </span>
           <span className="ui-grow" />
           <button

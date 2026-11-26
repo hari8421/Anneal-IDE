@@ -325,11 +325,12 @@ export const api = {
     onDelta: (text: string) => void,
     signal?: AbortSignal,
     contextual = false,
+    skills: string[] = [],
   ): Promise<string> => {
     let content = '';
     await stream(
       '/api/chat',
-      { messages, contextual },
+      { messages, contextual, skills },
       (event, data) => {
         if (event === 'delta') {
           const chunk = String(data.text ?? '');
